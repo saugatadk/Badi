@@ -1381,11 +1381,38 @@ async function sendAgentQuery(promptText) {
     if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
     const data = await resp.json();
 
+    const isOutOfScope = data.tool_called === 'none_out_of_scope' || 
+                         data.agent_role === 'ScopeEnforcer' || 
+                         (data.supporting_evidence && data.supporting_evidence.status === 'out_of_scope');
+    const isBoundary = data.tool_called === 'none_boundary_enforced' || 
+                       data.agent_role === 'GuardrailEnforcer';
+
+    const statusBadge = isOutOfScope
+      ? `<span class="timestamp" style="background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.3); font-weight: 600;">Out of Scope</span>`
+      : isBoundary
+        ? `<span class="timestamp" style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); font-weight: 600;">Boundary Enforced</span>`
+        : `<span class="timestamp">Grounded in FalkorDB</span>`;
+
+    const pathBadge = isOutOfScope
+      ? `<span class="path-badge" style="background: rgba(239,68,68,0.2); color: #f87171; border: 1px solid rgba(239,68,68,0.35);">Scope Restricted</span>`
+      : isBoundary
+        ? `<span class="path-badge" style="background: rgba(245,158,11,0.2); color: #fbbf24; border: 1px solid rgba(245,158,11,0.35);">Epistemic Restriction</span>`
+        : `<span class="path-badge">FalkorDB Verified</span>`;
+
+    const pathTitle = isOutOfScope
+      ? `<span>Show Scope Evaluation & Graph Audit</span>`
+      : isBoundary
+        ? `<span>Show Boundary Evaluation & Audit</span>`
+        : `<span>Show Graph Path & Cypher Behind Answer</span>`;
+
+    const pathIcon = (isOutOfScope || isBoundary) ? `fa-solid fa-ban` : `fa-solid fa-diagram-project`;
+    const pathIconColor = isOutOfScope ? `#f87171` : (isBoundary ? `#fbbf24` : `var(--sky-main)`);
+
     loadingBubble.innerHTML = `
       <div class="bubble-header">
         <span class="agent-name"><i class="fa-solid fa-shield-halved"></i> ${escapeHtml(data.agent_role)}</span>
         <div style="display: flex; align-items: center; gap: 0.5rem;">
-          <span class="timestamp">Grounded in FalkorDB</span>
+          ${statusBadge}
           <button class="copy-code-btn" title="Copy answer" onclick="copyBubbleAnswer(this)"><i class="fa-regular fa-copy"></i> Copy</button>
         </div>
       </div>
@@ -1395,10 +1422,10 @@ async function sendAgentQuery(promptText) {
         <summary>
           <div class="path-summary-left">
             <i class="fa-solid fa-chevron-right path-chevron"></i>
-            <i class="fa-solid fa-diagram-project" style="color: var(--sky-main);"></i>
-            <span>Show Graph Path & Cypher Behind Answer</span>
+            <i class="${pathIcon}" style="color: ${pathIconColor};"></i>
+            ${pathTitle}
           </div>
-          <span class="path-badge">FalkorDB Verified</span>
+          ${pathBadge}
         </summary>
         <div class="bubble-path-body">
           <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.72rem; color: var(--text-muted); border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.35rem;">
@@ -1424,7 +1451,9 @@ async function sendAgentQuery(promptText) {
     `;
 
     // Automatically shift map visual focus to the queried path / road / corridor
-    focusMapFromAgentResponse(data);
+    if (!isOutOfScope && !isBoundary) {
+      focusMapFromAgentResponse(data);
+    }
 
     // Refresh memory timeline and network in background
     fetchMemories();
@@ -1603,7 +1632,12 @@ function setupEventHandlers() {
       btn.classList.add("active");
       currentReconFilter = btn.dataset.reconFilter;
       renderMissions(currentMissions);
-      showToast(`Filter: ${btn.innerText.trim()}`, "info");
+      const cleanLabel = (btn.textContent || btn.innerText || "")
+        .replace(/\s+/g, " ")
+        .replace(/\(\s+/g, "(")
+        .replace(/\s+\)/g, ")")
+        .trim();
+      showToast(`Filter: ${cleanLabel}`, "info");
     });
   });
 
@@ -1635,7 +1669,12 @@ function setupEventHandlers() {
       btn.classList.add("active");
       currentBridgeFilter = btn.dataset.filter;
       renderBridgeMarkers(allBridgesData, currentBridgeFilter);
-      showToast(`Bridge Filter: ${btn.innerText.trim()}`, "info");
+      const cleanLabel = (btn.textContent || btn.innerText || "")
+        .replace(/\s+/g, " ")
+        .replace(/\(\s+/g, "(")
+        .replace(/\s+\)/g, ")")
+        .trim();
+      showToast(`Bridge Filter: ${cleanLabel}`, "info");
     });
   });
 

@@ -1738,6 +1738,10 @@ button,
   white-space: nowrap;
 }
 
+.recon-filter-rail .pill-btn span {
+  display: inline;
+}
+
 .mission-reason {
   font-size: 0.78rem;
   color: var(--text-secondary);

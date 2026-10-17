@@ -5,7 +5,7 @@ import httpx
 from typing import Dict, Any, Optional, List, Tuple
 from google import genai
 from google.genai import types
-from backend.config import GEMINI_API_KEY, GEMINI_MODEL, OPENROUTER_API_KEY, OPENROUTER_MODEL
+from backend.config import GEMINI_API_KEY, GEMINI_MODEL
 from backend.models import AgentQueryResponse, RoadStatus, SettlementAccessState
 from backend.queries import (
     classify_settlement_access,
@@ -72,7 +72,7 @@ Relationships:
 def get_falkordb_live_context() -> str:
     """
     Constructs a real-time snapshot of the active FalkorDB graph state
-    for grounding LLM models (OpenRouter / Gemini) in hard disaster telemetry.
+    for grounding Gemini 3.1 Flash Lite in hard disaster telemetry.
     """
     try:
         g = get_graph()
@@ -398,8 +398,123 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
             memory_id=mem_id
         )
 
-    # 2. Point-to-Point Corridor Routing Intent (A to B Transit Pathfinding & Passability)
-    if not any(k in prompt_lower for k in ["blast radius", "impact", "cut off", "what happens if", "blocked if", "depend on"]):
+    # 2. Road Observation / Passability Status Update Intent
+    is_obs_keyword = bool(re.search(r"\b(update|record|report(ed)?|observed?|found|spotted|saw)\b", prompt_lower))
+    is_status_keyword = bool(re.search(r"\b(passable|blocked|damaged|open|landslide|hazard|washed)\b", prompt_lower))
+    is_explicit_obs = bool(re.search(r"\b(record\s+observation|update\s+road|update\s+corridor|mark\s+road|mark\s+as|set\s+status|change\s+status|reflect\s+the\s+change)\b", prompt_lower))
+
+    if (is_obs_keyword and is_status_keyword) or is_explicit_obs:
+        role = "Field Coordinator"
+        # 1. Resolve target road
+        rid, rname, candidates = resolve_road_id(prompt)
+        if not rid:
+            # Try from endpoints if mentioned (e.g. from Syabrubesi to Briddhim)
+            ep_orig, ep_dest = extract_corridor_endpoints(prompt)
+            if ep_orig and ep_dest:
+                rid, rname, candidates = resolve_road_id(f"{ep_orig[1]} {ep_dest[1]}")
+
+        if not rid:
+            cand_str = ", ".join(candidates[:4]) if candidates else "None"
+            answer = (
+                f"I could not identify which road corridor you wish to update from your query: *'{prompt}'*.\n\n"
+                f"Please specify a surveyed corridor name or road ID. Valid options include: {cand_str}."
+            )
+            return AgentQueryResponse(
+                answer=answer,
+                agent_role=role,
+                tool_called="record_road_observation",
+                cypher_executed="None: road unresolved",
+                supporting_evidence={"status": "unresolved", "candidates": candidates},
+                memory_id=None
+            )
+
+        # 2. Extract reported status
+        # Priority A: Explicit command directive (e.g. "update status to blocked", "set to passable", "mark as blocked")
+        status_directive_match = re.search(
+            r"(?:update|set|change|mark|switch)(?:\s+(?:the|this|corridor|road))?(?:\s+status)?\s+(?:to|as)\s+([a-z_]+)",
+            prompt_lower
+        ) or re.search(
+            r"status\s+(?:to|is|=)\s+([a-z_]+)",
+            prompt_lower
+        )
+        target_token = status_directive_match.group(1) if status_directive_match else ""
+
+        if target_token in ["blocked", "closed", "impassable", "severed", "landslide", "washed"]:
+            reported_st = "blocked"
+        elif target_token in ["passable", "verified_passable", "open", "clear"]:
+            reported_st = "verified_passable"
+        elif target_token in ["unknown", "unverified"]:
+            reported_st = "unknown"
+        elif target_token in ["disputed"]:
+            reported_st = "disputed"
+        else:
+            # Priority B: Contextual conditions with positional resolution if both appear
+            has_blocked = any(k in prompt_lower for k in ["blocked", "landslide", "closed", "washed", "severed", "impassable"])
+            has_passable = any(k in prompt_lower for k in ["passable", "open", "clear"])
+            if has_blocked and not has_passable:
+                reported_st = "blocked"
+            elif has_passable and not has_blocked:
+                reported_st = "verified_passable"
+            elif has_blocked and has_passable:
+                pos_blocked = max(prompt_lower.rfind(k) for k in ["blocked", "landslide", "closed", "washed", "severed", "impassable"] if k in prompt_lower)
+                pos_passable = max(prompt_lower.rfind(k) for k in ["passable", "open", "clear"] if k in prompt_lower)
+                reported_st = "blocked" if pos_blocked > pos_passable else "verified_passable"
+            else:
+                reported_st = "unknown"
+
+        # 3. Detect scout verification and source
+        scout_verified = bool(re.search(r"\b(scout|physically\s*survey|ground\s*survey|field\s*inspection)\b", prompt_lower))
+        source = (
+            "aerial_recon_helicopter" if ("helicopter" in prompt_lower or "aerial" in prompt_lower)
+            else "field_scout" if scout_verified
+            else "operator_chat"
+        )
+
+        obs_res = record_road_observation(
+            road_name_or_id=rid,
+            reported_status=reported_st,
+            note=prompt,
+            source=source,
+            scout_verified=scout_verified
+        )
+
+        if obs_res.get("status") == "ok":
+            rec_st = obs_res["recorded_status"].replace("_", " ").title()
+            net_st = obs_res["resolved_network_status"].replace("_", " ").title()
+
+            lines = [
+                f"**Field Observation Recorded in FalkorDB**\n",
+                f"• **Corridor:** {obs_res['road_name']} (`{obs_res['road_id']}`)",
+                f"• **Source:** {source.replace('_', ' ').title()}",
+                f"• **Reported Condition:** {reported_st.replace('_', ' ').title()}",
+                f"• **Recorded In Graph:** {rec_st}",
+                f"• **Active Network Passability:** {net_st}",
+                f"• **Resolution:** {obs_res.get('resolution_reason', 'Observation committed.')}"
+            ]
+            if obs_res.get("warning"):
+                lines.append(f"\n> **Epistemic Safety Rule:** {obs_res['warning']}")
+
+            lines.append(f"\n• **Episodic Memory Node:** `{obs_res.get('memory_id')}`")
+            lines.append(f"• **Triage Queue Recalibration:** {obs_res.get('missions_count', 0)} active reconnaissance bottleneck missions updated.")
+
+            answer = "\n".join(lines)
+            cypher = (
+                f"MATCH (r:RoadSegment {{id: '{rid}'}}) "
+                f"CREATE (o:Observation {{id: '{obs_res.get('observation_id')}', status: '{obs_res['recorded_status']}', source: '{source}'}})-[:HAS_OBSERVATION]->(r);\n"
+                f"MATCH (u)-[rel:ROAD_TO {{road_id: '{rid}'}}]->(v) SET rel.status = '{obs_res['resolved_network_status']}';\n"
+                f"MATCH (m:Mission) ... Dynamic cut-edge triage recalculation"
+            )
+            return AgentQueryResponse(
+                answer=answer,
+                agent_role=role,
+                tool_called="record_road_observation",
+                cypher_executed=cypher,
+                supporting_evidence=obs_res,
+                memory_id=obs_res.get("memory_id")
+            )
+
+    # 3. Point-to-Point Corridor Routing Intent (A to B Transit Pathfinding & Passability)
+    if not any(k in prompt_lower for k in ["blast radius", "impact", "cut off", "what happens if", "blocked if", "depend on", "update", "record", "report"]):
         ep_orig, ep_dest = extract_corridor_endpoints(prompt)
         if ep_orig and ep_dest and ep_orig[0] != ep_dest[0]:
             role = "Route Analyst"
@@ -796,11 +911,11 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
             memory_id=mem_id
         )
 
-    # 9. General or Analytical Query Fallback: If an LLM is available, delegate to LLM grounded in live FalkorDB context
-    if OPENROUTER_API_KEY:
-        openrouter_res = _execute_openrouter_agent_query(prompt, session_id)
-        if openrouter_res:
-            return openrouter_res
+    # 9. General or Analytical Query Fallback: If Gemini is available, delegate to Gemini grounded in live FalkorDB context
+    if GEMINI_API_KEY:
+        gemini_res = _execute_gemini_agent_query(prompt, session_id)
+        if gemini_res:
+            return gemini_res
 
     # Offline / Static Fallback when no LLM API key is present or LLM call fails
     role = "Route Analyst"
@@ -838,7 +953,7 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
         memory_id=mem_id
     )
 
-OPENROUTER_TOOLS = [
+FALKORDB_DOMAIN_TOOLS = [
     {
         "type": "function",
         "function": {
@@ -982,118 +1097,13 @@ OPENROUTER_TOOLS = [
     }
 ]
 
-def _dispatch_openrouter_tool(fn_name: str, fn_args: dict, session_id: str = "ops_session") -> Tuple[Dict[str, Any], str]:
-    """Executes a validated domain tool call generated by the model against live FalkorDB graph."""
-    if fn_name == "find_route_between":
-        orig = fn_args.get("origin", "")
-        dest = fn_args.get("destination", "")
-        data = find_route_between(orig, dest)
-        return data, data.get("cypher_executed", "MATCH p = (start:Location)-[:ROAD_TO*1..8]->(dest:Location)...")
-
-    elif fn_name == "get_settlement_condition":
-        s_name = fn_args.get("settlement_name", "")
-        sid, s_display, candidates = resolve_settlement_id(s_name)
-        if not sid:
-            return {
-                "status": "unresolved",
-                "error": f"Settlement '{s_name}' could not be identified in FalkorDB. No access evaluation was made.",
-                "available_settlements": candidates
-            }, "None: settlement unresolved"
-
-        evidence = trace_settlement_access(sid)
-        g = get_graph()
-        cypher = f"MATCH (s:Location {{id: '{sid}'}})-[r:ROAD_TO]-(n:Location) RETURN DISTINCT r.road_id, r.road_name, r.status, n.name"
-        roads_res = g.query(cypher)
-        roads = [
-            {"road_id": row[0], "road_name": row[1], "status": row[2], "connected_to": row[3]}
-            for row in (roads_res.result_set or [])
-        ]
-        evidence["connected_roads"] = roads
-        full_cypher = f"{evidence.get('cypher_executed', '')};\n{cypher}"
-        return evidence, full_cypher
-
-    elif fn_name == "get_bridge_damage_summary":
-        summary = get_bridge_damage_summary()
-        return summary, summary.get("cypher_executed", "MATCH (b:Bridge) RETURN b.status, count(b)")
-
-    elif fn_name == "analyze_road_impact":
-        target = fn_args.get("road_name_or_id", "")
-        rid, r_display, candidates = resolve_road_id(target)
-        if not rid:
-            return {
-                "status": "unresolved",
-                "error": f"Road corridor '{target}' could not be identified in FalkorDB. No impact calculation was made.",
-                "available_roads": candidates
-            }, "None: road unresolved"
-
-        data = analyze_road_impact(rid)
-        actual_cypher = data.get("cypher_executed", "").replace("$road_id", f"'{rid}'")
-        return data, actual_cypher
-
-    elif fn_name == "get_active_recon_missions":
-        data = get_active_recon_missions()
-        return data, data.get("cypher_executed", "MATCH (m:Mission) RETURN m ORDER BY m.priority_score DESC")
-
-    elif fn_name == "explain_decision_chain":
-        target = fn_args.get("road_name_or_id", "")
-        rid, r_display, candidates = resolve_road_id(target)
-        if not rid:
-            return {
-                "status": "unresolved",
-                "error": f"Road corridor '{target}' could not be identified in FalkorDB.",
-                "available_roads": candidates
-            }, "None: road unresolved"
-
-        data = explain_decision_chain(rid)
-        return data, data.get("cypher_executed", f"MATCH (r:RoadSegment {{id: '{rid}'}}) OPTIONAL MATCH (r)-[:HAS_OBSERVATION]->(o:Observation)...")
-
-    elif fn_name == "recall_episodic_memory":
-        limit = int(fn_args.get("limit", 5))
-        data = recall_episodic_memory(limit)
-        return data, data.get("cypher_executed", "MATCH (e:EpisodicMemory) RETURN e ORDER BY e.timestamp DESC LIMIT $limit")
-
-    elif fn_name == "record_road_observation":
-        target = fn_args.get("road_name_or_id", "")
-        status_str = fn_args.get("status", "blocked")
-        note = fn_args.get("note", "Reported via operator chat")
-        source = fn_args.get("source", "operator_chat")
-
-        res = record_road_observation(
-            road_name_or_id=target,
-            reported_status=status_str,
-            note=note,
-            source=source
-        )
-        cypher = (
-            f"MATCH (r:RoadSegment {{id: '{res.get('road_id')}'}}) CREATE (o:Observation {{status: '{res.get('recorded_status')}'}});\n"
-            f"MATCH (u)-[rel:ROAD_TO {{road_id: '{res.get('road_id')}'}}]->(v) SET rel.status = '{res.get('resolved_network_status')}';\n"
-            f"Dynamic mission re-ranking executed in FalkorDB."
-        ) if res.get("status") == "ok" else "None: observation rejected or unresolved"
-        return res, cypher
-
-    return {"error": f"Unknown or disallowed tool: {fn_name}"}, ""
-
-def _validate_and_sanitize_response(
-    answer: str,
-    tool_outputs: List[Dict[str, Any]]
-) -> str:
+def _execute_gemini_agent_query(prompt: str, session_id: str) -> Optional[AgentQueryResponse]:
     """
-    Lightweight evidence validator: ensures model claims do not fabricate
-    or directly contradict structured evidence returned by tools.
+    Executes grounded agent intelligence query using Google Gemini 3.1 Flash Lite.
+    Directly injects live FalkorDB disaster graph context into system instruction
+    to guarantee factual disaster grounding without hallucinations.
     """
-    if not tool_outputs:
-        return answer
-
-    # Clean any leftover raw XML tags
-    cleaned = re.sub(r"<tool_call>.*?</tool_call>", "", answer, flags=re.DOTALL).strip()
-    return cleaned or answer
-
-def _execute_openrouter_agent_query(prompt: str, session_id: str) -> Optional[AgentQueryResponse]:
-    """
-    Executes grounded agent tool-calling loop using OpenRouter (e.g. NVIDIA Nemotron free model).
-    Directly injects live FalkorDB disaster graph context into the prompt to guarantee factual grounding.
-    """
-    if not OPENROUTER_API_KEY:
+    if not GEMINI_API_KEY:
         return None
     try:
         agent_role = "Route Analyst"
@@ -1105,137 +1115,93 @@ def _execute_openrouter_agent_query(prompt: str, session_id: str) -> Optional[Ag
 
         system_instruction = (
             f"You are Badi ({agent_role}), an expert disaster response AI grounded in live FalkorDB graph data for the Trishuli & Bhote Koshi flood corridor in Nepal.\n"
-            f"You have direct access to the live FalkorDB disaster graph snapshot below and predefined callable domain tools. Base all factual, topological, and numerical claims strictly on this grounded data. Never guess or fabricate information.\n"
-            f"Never assume a road or settlement if the user mentions an unverified name: use tools or report if it is unmapped in the graph.\n"
-            f"When an operator, field scout, or aerial reconnaissance reports a road blockage, passability change, or landslide (e.g. 'found blocked, update this'), call record_road_observation.\n"
-            f"Under Epistemic Safety Rules, reports claiming a road is passable cannot mark a road as verified_passable without physical scout survey.\n"
+            f"You have direct access to the live FalkorDB disaster graph snapshot below. Base all factual, topological, and numerical claims strictly on this grounded data. Never guess or fabricate information.\n"
+            f"Never assume a road or settlement if the user mentions an unverified name: report if it is unmapped in the graph.\n"
             f"Do not confuse surveyed household counts with total population. Clarify that the graph records household units.\n"
-            f"When you receive tool execution results, synthesize a clear, structured markdown summary directly answering the user query without making further tool calls or outputting XML tags.\n"
+            f"STRICT DOMAIN & CONTEXT CONSTRAINT:\n"
+            f"You must ONLY answer with the context on the FalkorDB disaster graph (settlements, road corridors, bridges, recon missions, hospital access paths, and disaster relief).\n"
+            f"If the user's query is out of scope or not relevant to the disaster corridor (such as general culture, festivals, trivia, coding, history, or external topics):\n"
+            f"- Do NOT answer the question or explain external concepts (e.g., do NOT explain what Dashain is).\n"
+            f"- Explicitly output that the query is out of scope or not relevant to corridor operations in FalkorDB.\n"
+            f"- You MUST prefix your response with '[OUT_OF_SCOPE]' at the very start, followed by a concise statement that Badi only evaluates mapped topological connectivity, infrastructure damage, and disaster response data inside the FalkorDB Trishuli flood corridor graph.\n"
             f"Do not output emojis under any circumstances. Keep responses clean, technical, and professional without emoji icons.\n\n"
             f"{live_graph_context}\n\n"
             f"{FALKORDB_SCHEMA_PROMPT}"
         )
 
-        headers = {
-            "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "HTTP-Referer": "http://localhost:8000",
-            "X-Title": "Badi Disaster Response"
-        }
+        client = genai.Client(api_key=GEMINI_API_KEY)
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system_instruction,
+                temperature=0.1
+            )
+        )
 
-        messages = [
-            {"role": "system", "content": system_instruction},
-            {"role": "user", "content": prompt}
-        ]
+        if response and response.text:
+            raw_answer = response.text.strip()
+            
+            is_out_of_scope = (
+                "[OUT_OF_SCOPE]" in raw_answer
+                or raw_answer.lower().startswith("out of scope")
+                or "outside my operational disaster" in raw_answer.lower()
+                or "outside of my operational" in raw_answer.lower()
+                or "outside the operational scope" in raw_answer.lower()
+                or "not relevant to" in raw_answer.lower()
+                or "out of scope" in raw_answer.lower()
+            )
 
-        payload = {
-            "model": OPENROUTER_MODEL,
-            "messages": messages,
-            "tools": OPENROUTER_TOOLS,
-            "temperature": 0.1
-        }
+            if is_out_of_scope:
+                clean_answer = raw_answer.replace("[OUT_OF_SCOPE]", "").strip()
+                mem_id = record_episodic_memory(
+                    session_id=session_id,
+                    agent_role="ScopeEnforcer",
+                    event_type="out_of_scope_query",
+                    summary=f"Query evaluated as out of operational scope: {prompt[:80]}"
+                )
+                return AgentQueryResponse(
+                    answer=clean_answer,
+                    agent_role="ScopeEnforcer",
+                    tool_called="none_out_of_scope",
+                    cypher_executed="None: Query is out of operational scope. No Cypher graph traversal executed.",
+                    supporting_evidence={
+                        "status": "out_of_scope",
+                        "reason": "Query is not relevant to mapped FalkorDB disaster graph data.",
+                        "permitted_scope": [
+                            "road_passability",
+                            "bridge_damage_summary",
+                            "hospital_access_routes",
+                            "settlement_isolation",
+                            "reconnaissance_missions"
+                        ]
+                    },
+                    memory_id=mem_id
+                )
 
-        with httpx.Client(timeout=15.0) as client:
-            resp = client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
-            if resp.status_code != 200:
-                return None
-            data = resp.json()
-            choices = data.get("choices")
-            if not choices:
-                return None
-            first_msg = choices[0].get("message", {})
-            messages.append(first_msg)
-
-            tool_calls = first_msg.get("tool_calls")
-            executed_tools = []
-            cyphers_executed = []
-            raw_tool_outputs = []
-
-            if tool_calls:
-                for tc in tool_calls:
-                    fn_name = tc.get("function", {}).get("name", "")
-                    raw_args = tc.get("function", {}).get("arguments", "{}")
-                    try:
-                        fn_args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                    except Exception:
-                        fn_args = {}
-
-                    tool_output, cypher_used = _dispatch_openrouter_tool(fn_name, fn_args, session_id=session_id)
-                    executed_tools.append(fn_name)
-                    raw_tool_outputs.append(tool_output)
-                    if cypher_used and ("MATCH" in cypher_used or "CREATE" in cypher_used):
-                        cyphers_executed.append(cypher_used)
-
-                    messages.append({
-                        "role": "tool",
-                        "tool_call_id": tc.get("id"),
-                        "content": json.dumps(tool_output)
-                    })
-
-                # Second turn: get model's synthesized response with tool outputs
-                messages.append({
-                    "role": "user",
-                    "content": "All tool execution results have been provided above. Synthesize your final grounded factual response answering my original question. Base all numerical claims strictly on the tool evidence. Do not output tool_call tags or code."
-                })
-                second_payload = {
-                    "model": OPENROUTER_MODEL,
-                    "messages": messages,
-                    "temperature": 0.1
-                }
-                resp2 = client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=second_payload)
-                if resp2.status_code == 200:
-                    choices2 = resp2.json().get("choices", [])
-                    if choices2:
-                        raw_answer = choices2[0].get("message", {}).get("content", "").strip()
-                        answer = _validate_and_sanitize_response(raw_answer, raw_tool_outputs)
-
-                        mem_id = record_episodic_memory(
-                            session_id=session_id,
-                            agent_role=agent_role,
-                            event_type="openrouter_agent_query",
-                            summary=f"{agent_role} answered user query grounded in FalkorDB tools: {prompt[:80]}"
-                        )
-
-                        if len(raw_tool_outputs) == 1 and isinstance(raw_tool_outputs[0], dict):
-                            merged_evidence = dict(raw_tool_outputs[0])
-                            merged_evidence["_grounding_model"] = OPENROUTER_MODEL
-                            merged_evidence["_tools_executed"] = executed_tools
-                        elif raw_tool_outputs:
-                            merged_evidence = {
-                                "grounding_model": OPENROUTER_MODEL,
-                                "tools_executed": executed_tools,
-                                "tool_evidence": raw_tool_outputs
-                            }
-                        else:
-                            merged_evidence = {"model": OPENROUTER_MODEL, "tools_executed": executed_tools}
-
-                        return AgentQueryResponse(
-                            answer=answer,
-                            agent_role=agent_role,
-                            tool_called=", ".join(executed_tools) or "falkordb_openrouter_tools",
-                            cypher_executed=";\n".join(cyphers_executed) or "Live Cypher Queries via FalkorDB",
-                            supporting_evidence=merged_evidence,
-                            memory_id=mem_id
-                        )
-            else:
-                answer = first_msg.get("content", "").strip()
-                if answer:
-                    mem_id = record_episodic_memory(
-                        session_id=session_id,
-                        agent_role=agent_role,
-                        event_type="openrouter_agent_direct",
-                        summary=f"{agent_role} responded to query grounded in live FalkorDB graph: {prompt[:80]}"
-                    )
-                    return AgentQueryResponse(
-                        answer=answer,
-                        agent_role=agent_role,
-                        tool_called="openrouter_falkordb_grounded",
-                        cypher_executed="MATCH (l:Location), (r:RoadSegment), (b:Bridge), (m:Mission) ... Live FalkorDB Graph Snapshot Grounding",
-                        supporting_evidence={"model": OPENROUTER_MODEL, "context_grounded": True},
-                        memory_id=mem_id
-                    )
-    except Exception:
+            mem_id = record_episodic_memory(
+                session_id=session_id,
+                agent_role=agent_role,
+                event_type="gemini_agent_query",
+                summary=f"{agent_role} synthesized corridor intelligence using Gemini 3.1 Flash Lite: {prompt[:80]}"
+            )
+            return AgentQueryResponse(
+                answer=raw_answer,
+                agent_role=agent_role,
+                tool_called="gemini_falkordb_grounded",
+                cypher_executed="MATCH (l:Location), (r:RoadSegment), (b:Bridge), (m:Mission) ... Live FalkorDB Graph Snapshot Grounding",
+                supporting_evidence={
+                    "model": GEMINI_MODEL,
+                    "grounded_in": "FalkorDB",
+                    "context_grounded": True
+                },
+                memory_id=mem_id
+            )
+    except Exception as exc:
+        print(f"Gemini agent execution error: {exc}")
         return None
     return None
+
 
 def _has_direct_operational_intent(prompt_lower: str) -> bool:
     """Detects if prompt matches an explicit operational query for instant sub-30ms FalkorDB execution."""
@@ -1268,7 +1234,8 @@ def _has_direct_operational_intent(prompt_lower: str) -> bool:
         r"\b(episodic|recent event|history|recall|memory log)\b",
         r"\b(mission|missions|recon queue|priority queue|triage queue)\b",
         r"\b(settlement|settlements|village|households|district|rasuwa|nuwakot)\b",
-        r"\b(passable|blocked|isolated|open)\b"
+        r"\b(passable|blocked|isolated|open)\b",
+        r"\b(record|observation|report|scout|survey|landslide)\b"
     ]
     return any(re.search(pat, prompt_lower) for pat in patterns)
 
@@ -1276,7 +1243,7 @@ def execute_agent_query(prompt: str, session_id: str = "ops_session") -> AgentQu
     """
     Main grounded agent workflow.
     Evaluates hard guardrails, orchestrates agent roles, queries FalkorDB via safe domain tools,
-    logs episodic memory in FalkorDB, and supports OpenRouter and google-genai with intelligent fallback.
+    logs episodic memory in FalkorDB, and supports Google Gemini 3.1 Flash Lite with intelligent fallback.
     """
     # 1. Hard Guardrail Check
     refusal = _check_guardrails(prompt)
@@ -1302,69 +1269,11 @@ def execute_agent_query(prompt: str, session_id: str = "ops_session") -> AgentQu
     if _has_direct_operational_intent(prompt_lower):
         return _deterministic_agent_router(prompt, session_id)
 
-    # 2. Check if OPENROUTER_API_KEY is available (NVIDIA Nemotron / OpenRouter model)
-    if OPENROUTER_API_KEY:
-        openrouter_res = _execute_openrouter_agent_query(prompt, session_id)
-        if openrouter_res:
-            return openrouter_res
-
-    # 3. Check if GEMINI_API_KEY is available for Dynamic LLM Tool Calling
+    # 2. Check if GEMINI_API_KEY is available for Dynamic Grounded LLM Synthesis
     if GEMINI_API_KEY:
-        try:
-            client = genai.Client(api_key=GEMINI_API_KEY)
+        gemini_res = _execute_gemini_agent_query(prompt, session_id)
+        if gemini_res:
+            return gemini_res
 
-            agent_role = "Route Analyst"
-            prompt_lower = prompt.lower()
-            if any(k in prompt_lower for k in ["mission", "scout", "triage", "queue", "report", "observe", "verify", "memory", "decision"]):
-                agent_role = "Field Coordinator"
-
-            system_instruction = (
-                f"You are Badi ({agent_role}), an AI agent grounded in FalkorDB for flood response in Nepal's Trishuli corridor.\n"
-                f"You have access to FalkorDB tools. ALWAYS query the graph to give accurate facts. Never guess.\n"
-                f"Do not output emojis under any circumstances. Keep responses clean, technical, and professional without emoji icons.\n"
-                f"{FALKORDB_SCHEMA_PROMPT}"
-            )
-
-            # Available domain tools with clean signatures (NO default arguments)
-            agent_tools = [
-                query_bridge_damage,
-                trace_settlement_access,
-                inspect_road_evidence,
-                analyze_road_impact,
-                explain_decision_chain,
-                get_active_recon_missions,
-                recall_episodic_memory,
-                record_road_observation
-            ]
-
-            response = client.models.generate_content(
-                model=GEMINI_MODEL,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=system_instruction,
-                    tools=agent_tools,
-                    temperature=0.1
-                )
-            )
-
-            if response and response.text:
-                answer = response.text.strip()
-                mem_id = record_episodic_memory(
-                    session_id=session_id,
-                    agent_role=agent_role,
-                    event_type="gemini_agent_query",
-                    summary=f"{agent_role} answered user query grounded in FalkorDB tools: {prompt[:80]}"
-                )
-                return AgentQueryResponse(
-                    answer=answer,
-                    agent_role=agent_role,
-                    tool_called="falkordb_dynamic_tools",
-                    cypher_executed="Live Cypher Queries via FalkorDB Domain Tools",
-                    supporting_evidence={"source": "gemini-2.5-flash", "grounded_in": "FalkorDB"},
-                    memory_id=mem_id
-                )
-        except Exception:
-            pass
-
-    # 4. Intelligent offline router grounded directly in FalkorDB
+    # 3. Intelligent offline router grounded directly in FalkorDB
     return _deterministic_agent_router(prompt, session_id)

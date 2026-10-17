@@ -5,7 +5,7 @@ from backend.agent import (
     analyze_road_impact,
     record_road_observation,
     _deterministic_agent_router,
-    OPENROUTER_TOOLS
+    FALKORDB_DOMAIN_TOOLS
 )
 from backend.queries import get_bridge_damage_summary
 
@@ -16,7 +16,7 @@ def test_unresolved_road_never_substitutes_dhunche(monkeypatch):
     the agent must NEVER silently substitute Syabrubesi–Dhunche.
     It must report the entity as unresolved and present valid options.
     """
-    monkeypatch.setattr("backend.agent.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("backend.agent.GEMINI_API_KEY", "")
     response = execute_agent_query("What happens if the road between Narnia and Atlantis is blocked?")
     assert "road_syabru_dhunche" not in response.answer.lower() or "could not" in response.answer.lower()
     assert "could not identify which road" in response.answer.lower()
@@ -34,7 +34,7 @@ def test_unresolved_settlement_never_substitutes_syabrubesi(monkeypatch):
     When an unknown settlement is inquired about, the agent must NEVER silently substitute Syabrubesi.
     It must explicitly report the settlement as unresolved.
     """
-    monkeypatch.setattr("backend.agent.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("backend.agent.GEMINI_API_KEY", "")
     response = execute_agent_query("Trace hospital access for Wonderland settlement")
     assert "loc_syabrubesi" not in response.answer.lower() or "could not" in response.answer.lower()
     assert "could not identify which settlement" in response.answer.lower()
@@ -82,7 +82,7 @@ def test_arbitrary_cypher_tool_is_not_exposed_to_agent():
     Arbitrary Cypher execution tools (e.g. execute_cypher_read_query) must NOT
     be exposed to the agent/LLM. Only parameterized domain tools are permitted.
     """
-    tool_names = [t["function"]["name"] for t in OPENROUTER_TOOLS]
+    tool_names = [t["function"]["name"] for t in FALKORDB_DOMAIN_TOOLS]
     assert "execute_cypher_read_query" not in tool_names
     assert "get_bridge_damage_summary" in tool_names
     assert "analyze_road_impact" in tool_names
@@ -106,7 +106,7 @@ def test_population_query_clarifies_households_vs_individuals(monkeypatch):
     When asked about population, the agent must clarify that the graph
     stores surveyed household units rather than individual census counts.
     """
-    monkeypatch.setattr("backend.agent.OPENROUTER_API_KEY", "")
+    monkeypatch.setattr("backend.agent.GEMINI_API_KEY", "")
     response = execute_agent_query("What is the population of settlements in Rasuwa district?")
     assert "household" in response.answer.lower()
 
@@ -146,4 +146,38 @@ def test_extract_corridor_endpoints_directionality():
     orig3, dest3 = extract_corridor_endpoints("route from gatlang to kispang")
     assert orig3[0] == "loc_gatlang"
     assert dest3[0] == "loc_kispang"
+
+def test_out_of_scope_query_scope_enforcement():
+    """
+    P0 Domain Boundary Rule:
+    Irrelevant questions outside the flood disaster corridor (e.g. general festivals, trivia)
+    must not execute graph Cypher traversals and must return dedicated out-of-scope metadata.
+    """
+    from backend.config import GEMINI_API_KEY
+    if not GEMINI_API_KEY:
+        pytest.skip("GEMINI_API_KEY not configured")
+
+    response = execute_agent_query("what is dashain?")
+    assert response.agent_role == "ScopeEnforcer"
+    assert response.tool_called == "none_out_of_scope"
+    assert "out of operational scope" in response.cypher_executed.lower()
+    assert response.supporting_evidence.get("status") == "out_of_scope"
+    assert "dashain is a" not in response.answer.lower()
+
+def test_observation_update_action_from_corridor_phrase():
+    """
+    P0 Action Execution Rule:
+    When an operator provides a field report requesting an update (even with endpoint phrasing),
+    the agent must take action via record_road_observation rather than read-only path routing.
+    """
+    prompt = "helicopter view found the path from syabrubesi bazaar to briddhim village passable. can you update this to reflect the change"
+    response = execute_agent_query(prompt)
+    assert response.agent_role == "Field Coordinator"
+    assert response.tool_called == "record_road_observation"
+    assert response.supporting_evidence.get("status") == "ok"
+    assert response.supporting_evidence.get("road_id") == "road_briddhim_syabru"
+    assert "road_briddhim_syabru" in response.cypher_executed
+    assert "Epistemic Safety Rule" in response.answer or "Epistemic" in response.supporting_evidence.get("warning", "")
+
+
 

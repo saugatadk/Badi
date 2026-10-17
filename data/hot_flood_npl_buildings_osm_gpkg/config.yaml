@@ -1,0 +1,89 @@
+iso3: NPL
+category:
+  name: buildings
+  formats: null
+  zip_formats: null
+  skip_pcodes: false
+  boundary_resolution: h3_neighbor
+  hdx:
+    title: Buildings
+    notes: 'Building footprints across the region, from residential homes to hospitals,
+      schools and places of worship. Useful for population estimation, damage assessment,
+      and urban planning.
+
+
+      Coverage reflects where volunteer mappers have been active. Urban areas are
+      usually well represented, remote areas may be sparse. Cross-check critical decisions
+      with local field knowledge.
+
+
+      - Source: [OpenStreetMap](https://www.openstreetmap.org), a free, collaborative
+      world map
+
+      - Tags: [building](https://wiki.openstreetmap.org/wiki/Key:building)
+
+      - Part of the [exports grid on HDX](https://data.humdata.org/organization/hot/)
+      by [HOT](https://www.hotosm.org/)
+
+      '
+    summary: Building footprints, from homes to hospitals, schools and places of worship.
+      Standing and destroyed together, split by status.
+    tags:
+    - facilities-infrastructure
+    - geodata
+    license: hdx-odc-odbl
+    license_url: https://opendatacommons.org/licenses/odbl/1-0/
+    caveats: OpenStreetMap data is crowd sourced and cannot be considered to be exhaustive
+    dataset_source: OpenStreetMap contributors
+  overture:
+    enabled: false
+    theme: ''
+    feature_type: ''
+    select: []
+    where: []
+    tiles: false
+  osm:
+    enabled: true
+    select:
+    - feature_id AS id
+    - tags['name'] AS name
+    - tags['name:en'] AS name_en
+    - CASE WHEN len(list_filter(map_keys(tags), k -> starts_with(k, 'destroyed:')))
+      > 0 THEN 'Destroyed' WHEN len(list_filter(map_keys(tags), k -> starts_with(k,
+      'damaged:'))) > 0 OR tags['damage:building'] IS NOT NULL THEN 'Damaged' ELSE
+      'Standing' END AS status
+    - coalesce(tags['building'], tags['destroyed:building'], tags['damaged:building'],
+      tags['damage:building']) AS building
+    - tags['building:levels'] AS building_levels
+    - tags['building:materials'] AS building_materials
+    - tags['was:building:levels'] AS was_building_levels
+    - tags['damage:type'] AS damage_type
+    - tags['end_date'] AS end_date
+    - tags['addr:full'] AS addr_full
+    - tags['addr:housenumber'] AS addr_housenumber
+    - tags['addr:street'] AS addr_street
+    - tags['addr:city'] AS addr_city
+    - tags['office'] AS office
+    - tags['source'] AS source
+    where: []
+    filter:
+      building: true
+      destroyed:building: true
+      damaged:building: true
+      damage:building: true
+    tiles: true
+  file:
+    enabled: true
+    path: ''
+    crs: ''
+    layer: ''
+    select: {}
+    where: []
+    tiles: true
+  transliterate:
+  - target: name_latin
+    source: name
+    prefer: name_en
+  temporal:
+    column: update_time
+source: osm

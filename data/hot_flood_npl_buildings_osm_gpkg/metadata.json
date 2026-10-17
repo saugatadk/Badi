@@ -1,0 +1,585 @@
+{
+  "feature_count": 20143,
+  "geometry_types": {
+    "POLYGON": 16845,
+    "LINESTRING": 3235,
+    "POINT": 63
+  },
+  "bbox": [
+    84.5549134,
+    27.7933974,
+    85.3805573,
+    28.2818703
+  ],
+  "columns": [
+    {
+      "name": "id",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 20143,
+      "top_values": []
+    },
+    {
+      "name": "name",
+      "type": "VARCHAR",
+      "null_count": 20095,
+      "null_percent": 99.76,
+      "distinct_count": 46,
+      "top_values": [
+        {
+          "value": "Samudayik Bidhya Mandir",
+          "count": 2
+        },
+        {
+          "value": "Rice Mill",
+          "count": 2
+        },
+        {
+          "value": "Uposhna Pradeshiya Bagbani Bikas Kendra, Trishuli, Nuwakot",
+          "count": 1
+        },
+        {
+          "value": "Nepal Guest House",
+          "count": 1
+        },
+        {
+          "value": "Gas Factory",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "name_en",
+      "type": "VARCHAR",
+      "null_count": 20140,
+      "null_percent": 99.99,
+      "distinct_count": 3,
+      "top_values": [
+        {
+          "value": "Sub-Tropical Horticulture Development Center",
+          "count": 1
+        },
+        {
+          "value": "Rasuwagadhi Hydropower Dam",
+          "count": 1
+        },
+        {
+          "value": "Galchhi Rural Municipality Office",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "name_ne",
+      "type": "VARCHAR",
+      "null_count": 20141,
+      "null_percent": 99.99,
+      "distinct_count": 2,
+      "top_values": [
+        {
+          "value": "\u0915\u094b\u092f\u094b\u0928 - \u0915\u093e\u0930\u094d\u092f\u093e\u0932\u092f",
+          "count": 1
+        },
+        {
+          "value": "\u0917\u0932\u094d\u091b\u0940 \u0917\u093e\u0909\u0901\u092a\u093e\u0932\u093f\u0915\u093e \u0915\u093e\u0930\u094d\u092f\u093e\u0932\u092f",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "status",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 3,
+      "top_values": [
+        {
+          "value": "Standing",
+          "count": 16841
+        },
+        {
+          "value": "Destroyed",
+          "count": 2886
+        },
+        {
+          "value": "Damaged",
+          "count": 416
+        }
+      ]
+    },
+    {
+      "name": "building",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 18,
+      "top_values": [
+        {
+          "value": "yes",
+          "count": 19686
+        },
+        {
+          "value": "house",
+          "count": 310
+        },
+        {
+          "value": "residential",
+          "count": 79
+        },
+        {
+          "value": "industrial",
+          "count": 14
+        },
+        {
+          "value": "retail",
+          "count": 12
+        }
+      ]
+    },
+    {
+      "name": "building_levels",
+      "type": "VARCHAR",
+      "null_count": 20135,
+      "null_percent": 99.96,
+      "distinct_count": 4,
+      "top_values": [
+        {
+          "value": "2",
+          "count": 3
+        },
+        {
+          "value": "1",
+          "count": 2
+        },
+        {
+          "value": "3",
+          "count": 2
+        },
+        {
+          "value": "8",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "building_materials",
+      "type": "VARCHAR",
+      "null_count": 20143,
+      "null_percent": 100.0,
+      "distinct_count": 0,
+      "top_values": []
+    },
+    {
+      "name": "was_building_levels",
+      "type": "VARCHAR",
+      "null_count": 20140,
+      "null_percent": 99.99,
+      "distinct_count": 3,
+      "top_values": [
+        {
+          "value": "1",
+          "count": 1
+        },
+        {
+          "value": "5",
+          "count": 1
+        },
+        {
+          "value": "6",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "damage_type",
+      "type": "VARCHAR",
+      "null_count": 19857,
+      "null_percent": 98.58,
+      "distinct_count": 3,
+      "top_values": [
+        {
+          "value": "flood",
+          "count": 164
+        },
+        {
+          "value": "landslide",
+          "count": 120
+        },
+        {
+          "value": "floods",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "name": "end_date",
+      "type": "VARCHAR",
+      "null_count": 20017,
+      "null_percent": 99.37,
+      "distinct_count": 1,
+      "top_values": [
+        {
+          "value": "2026-08-26",
+          "count": 126
+        }
+      ]
+    },
+    {
+      "name": "addr_full",
+      "type": "VARCHAR",
+      "null_count": 20143,
+      "null_percent": 100.0,
+      "distinct_count": 0,
+      "top_values": []
+    },
+    {
+      "name": "addr_housenumber",
+      "type": "VARCHAR",
+      "null_count": 20139,
+      "null_percent": 99.98,
+      "distinct_count": 4,
+      "top_values": [
+        {
+          "value": "Satar 001",
+          "count": 1
+        },
+        {
+          "value": "My resident 001",
+          "count": 1
+        },
+        {
+          "value": "45000",
+          "count": 1
+        },
+        {
+          "value": "1",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "addr_street",
+      "type": "VARCHAR",
+      "null_count": 20131,
+      "null_percent": 99.94,
+      "distinct_count": 7,
+      "top_values": [
+        {
+          "value": "Prithvi Rajmarg",
+          "count": 5
+        },
+        {
+          "value": "Devighat Khadga Bhanjyang 44900 Nepal",
+          "count": 2
+        },
+        {
+          "value": "prithvi Rajmarga",
+          "count": 1
+        },
+        {
+          "value": "Pipaltar, Colony",
+          "count": 1
+        },
+        {
+          "value": "Benighat-Janagaun Road",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "addr_city",
+      "type": "VARCHAR",
+      "null_count": 20135,
+      "null_percent": 99.96,
+      "distinct_count": 7,
+      "top_values": [
+        {
+          "value": "Mugling",
+          "count": 2
+        },
+        {
+          "value": "Nuwakot",
+          "count": 1
+        },
+        {
+          "value": "Chitwan",
+          "count": 1
+        },
+        {
+          "value": "Chumblingtar",
+          "count": 1
+        },
+        {
+          "value": "Dhading",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "office",
+      "type": "VARCHAR",
+      "null_count": 20142,
+      "null_percent": 100.0,
+      "distinct_count": 1,
+      "top_values": [
+        {
+          "value": "government",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "name": "source",
+      "type": "VARCHAR",
+      "null_count": 19174,
+      "null_percent": 95.19,
+      "distinct_count": 10,
+      "top_values": [
+        {
+          "value": "Bing",
+          "count": 740
+        },
+        {
+          "value": "MapBox",
+          "count": 86
+        },
+        {
+          "value": "EsriWorldImagery",
+          "count": 64
+        },
+        {
+          "value": "microsoft/BuildingFootprints",
+          "count": 49
+        },
+        {
+          "value": "services.digitalglobe.com",
+          "count": 23
+        }
+      ]
+    },
+    {
+      "name": "adm0_pcode",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 1,
+      "top_values": [
+        {
+          "value": "NPL",
+          "count": 20143
+        }
+      ]
+    },
+    {
+      "name": "adm0_name",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 1,
+      "top_values": [
+        {
+          "value": "Nepal",
+          "count": 20143
+        }
+      ]
+    },
+    {
+      "name": "adm1_pcode",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 2,
+      "top_values": [
+        {
+          "value": "NP03",
+          "count": 18672
+        },
+        {
+          "value": "NP04",
+          "count": 1471
+        }
+      ]
+    },
+    {
+      "name": "adm1_name",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 2,
+      "top_values": [
+        {
+          "value": "Bagmati",
+          "count": 18672
+        },
+        {
+          "value": "Gandaki",
+          "count": 1471
+        }
+      ]
+    },
+    {
+      "name": "adm2_pcode",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 6,
+      "top_values": [
+        {
+          "value": "NP0328",
+          "count": 9270
+        },
+        {
+          "value": "NP0330",
+          "count": 5877
+        },
+        {
+          "value": "NP0335",
+          "count": 1895
+        },
+        {
+          "value": "NP0329",
+          "count": 1630
+        },
+        {
+          "value": "NP0436",
+          "count": 1433
+        }
+      ]
+    },
+    {
+      "name": "adm2_name",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 6,
+      "top_values": [
+        {
+          "value": "Nuwakot",
+          "count": 9270
+        },
+        {
+          "value": "Dhading",
+          "count": 5877
+        },
+        {
+          "value": "Chitawan",
+          "count": 1895
+        },
+        {
+          "value": "Rasuwa",
+          "count": 1630
+        },
+        {
+          "value": "Gorkha",
+          "count": 1433
+        }
+      ]
+    },
+    {
+      "name": "adm3_pcode",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 16,
+      "top_values": [
+        {
+          "value": "NP0328301",
+          "count": 6790
+        },
+        {
+          "value": "NP0330408",
+          "count": 2305
+        },
+        {
+          "value": "NP0335401",
+          "count": 1895
+        },
+        {
+          "value": "NP0330407",
+          "count": 1774
+        },
+        {
+          "value": "NP0330410",
+          "count": 1601
+        }
+      ]
+    },
+    {
+      "name": "adm3_name",
+      "type": "VARCHAR",
+      "null_count": 0,
+      "null_percent": 0.0,
+      "distinct_count": 16,
+      "top_values": [
+        {
+          "value": "Bidur",
+          "count": 6790
+        },
+        {
+          "value": "Benighat Rorang",
+          "count": 2305
+        },
+        {
+          "value": "Ichchha Kamana",
+          "count": 1895
+        },
+        {
+          "value": "Siddhalek",
+          "count": 1774
+        },
+        {
+          "value": "Galchhi",
+          "count": 1601
+        }
+      ]
+    },
+    {
+      "name": "adm4_pcode",
+      "type": "VARCHAR",
+      "null_count": 20143,
+      "null_percent": 100.0,
+      "distinct_count": 0,
+      "top_values": []
+    },
+    {
+      "name": "adm4_name",
+      "type": "VARCHAR",
+      "null_count": 20143,
+      "null_percent": 100.0,
+      "distinct_count": 0,
+      "top_values": []
+    },
+    {
+      "name": "name_latin",
+      "type": "VARCHAR",
+      "null_count": 20095,
+      "null_percent": 99.76,
+      "distinct_count": 46,
+      "top_values": [
+        {
+          "value": "Samudayik Bidhya Mandir",
+          "count": 2
+        },
+        {
+          "value": "Rice Mill",
+          "count": 2
+        },
+        {
+          "value": "Nepal Guest House",
+          "count": 1
+        },
+        {
+          "value": "Mailung Khola Project",
+          "count": 1
+        },
+        {
+          "value": "Upper Trishuli 3A Powerhouse",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "summary": "20,143 features. geometry types: 16,845 POLYGON, 3,235 LINESTRING, 63 POINT. 17 of 28 columns are >=50% null (name, name_en, name_ne, building_levels, building_materials, was_building_levels, damage_type, end_date, addr_full, addr_housenumber, addr_street, addr_city, office, source, adm4_pcode, adm4_name, name_latin).",
+  "temporal": null
+}

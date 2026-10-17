@@ -1,0 +1,34 @@
+{
+  "total_buildings_surveyed": 20143,
+  "by_status": {
+    "Damaged": 416,
+    "Destroyed": 2886,
+    "Standing": 16841
+  },
+  "by_district": {
+    "Chitawan": {
+      "Standing": 1895
+    },
+    "Dhading": {
+      "Destroyed": 92,
+      "Standing": 5785
+    },
+    "Gorkha": {
+      "Standing": 1433
+    },
+    "Nuwakot": {
+      "Damaged": 375,
+      "Destroyed": 1994,
+      "Standing": 6901
+    },
+    "Rasuwa": {
+      "Damaged": 41,
+      "Destroyed": 800,
+      "Standing": 789
+    },
+    "Tanahu": {
+      "Standing": 38
+    }
+  },
+  "source": "HOT Nepal Flood 2026 OSM Building Footprints"
+}

@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Badi (बाढी) — Flood Response Route Intelligence</title>
+  <meta name="description" content="Graph-grounded route intelligence and field verification for flood disaster response in Nepal, powered by FalkorDB.">
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@600;700;800&display=swap" rel="stylesheet">
+
+  <!-- MapLibre GL CSS (Local offline-ready with CDN fallback) -->
+  <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+
+  <!-- Font Awesome Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
+
+  <!-- Custom Styles -->
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app-container">
+    <!-- Streamlined Minimalist Operational Header -->
+    <header id="main-header">
+      <div class="header-left">
+        <div class="logo-group">
+          <div class="pulse-icon"><i class="fa-solid fa-water"></i></div>
+          <div class="title-group">
+            <h1 class="app-title">Badi <span class="nepali-text">(बाढी)</span></h1>
+            <span class="region-pill">Trishuli Corridor</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Center: Apple-Crafted Glance Capsule (Consolidated Key Disaster Metrics) -->
+      <div class="header-center">
+        <div class="glance-capsule">
+          <div class="glance-item" title="39 Washed Out Bridges in Trishuli River Corridor">
+            <span class="glance-dot dot-rose"></span>
+            <span class="glance-label">Bridges Washed:</span>
+            <span class="glance-value text-rose" id="val-hot-bridges">39</span>
+          </div>
+          <div class="glance-divider"></div>
+          <div class="glance-item" title="2,886 Destroyed Buildings in Rasuwa & Nuwakot">
+            <span class="glance-dot dot-amber"></span>
+            <span class="glance-label">Bldgs Destroyed:</span>
+            <span class="glance-value text-amber" id="val-hot-buildings">2,886</span>
+          </div>
+          <div class="glance-divider"></div>
+          <div class="glance-item" title="Active Field Verification Missions in FalkorDB">
+            <span class="glance-dot dot-sky"></span>
+            <span class="glance-label">Missions:</span>
+            <span class="glance-value text-sky" id="val-active-missions">6</span>
+          </div>
+          <div class="glance-divider"></div>
+          <div class="glance-item" title="Passable vs Blocked Road Segments">
+            <span class="glance-dot dot-emerald"></span>
+            <span class="glance-label">Passable:</span>
+            <span class="glance-value text-emerald" id="val-verified-roads">6</span>
+            <span class="glance-slash">/</span>
+            <span class="glance-label">Blocked:</span>
+            <span class="glance-value text-rose" id="val-blocked-roads">3</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Invisible Metric Value Holders (Ensures backwards compatibility with API logic) -->
+      <span id="val-verified-settlements" style="display:none;"></span>
+      <span id="val-recon-settlements" style="display:none;"></span>
+      <span id="val-isolated-settlements" style="display:none;"></span>
+      <span id="val-unknown-roads" style="display:none;"></span>
+      <span id="val-episodic-memories" style="display:none;"></span>
+
+      <div class="header-right">
+        <button id="btn-trigger-landslide" class="action-btn btn-warning" title="Simulate landslide on Pasang Lhamu Hwy (road_syabru_dhunche)">
+          <i class="fa-solid fa-bolt"></i> Landslide
+        </button>
+        <button id="btn-reset-graph" class="action-btn btn-secondary" title="Reset FalkorDB to baseline seed state">
+          <i class="fa-solid fa-rotate-left"></i> Reset
+        </button>
+        <button id="btn-wipe-graph" class="action-btn btn-danger" title="Wipe FalkorDB graph to zero state (0 nodes)">
+          <i class="fa-solid fa-trash-can"></i> Wipe Graph
+        </button>
+      </div>
+    </header>
+
+    <!-- Main Workspace (Expansive Map + Sliding Side Dock) -->
+    <main id="main-content">
+      <!-- Zero-State Onboarding & Graph Ingestion Console -->
+      <section id="zero-state-overlay" class="zero-state-overlay hidden">
+        <div class="zero-state-card">
+          <div class="zero-state-badge">
+            <span class="status-pulse-dot"></span>
+            <span id="zero-telemetry-text">Empty Graph (0 Nodes)</span>
+          </div>
+
+          <div class="zero-state-hero">
+            <h2 class="zero-title">Load Network Topology</h2>
+            <p class="zero-subtitle">
+              Import a flood network JSON file to initialize the disaster graph.
+            </p>
+          </div>
+
+          <!-- Drag & Drop Zone -->
+          <div id="drop-zone" class="drop-zone">
+            <i class="fa-solid fa-arrow-up-from-bracket drop-zone-icon"></i>
+            <div class="drop-zone-text">
+              <strong>Drop .json file here</strong>
+              <span>or choose from computer</span>
+            </div>
+            <input type="file" id="topology-file-input" accept=".json" style="display:none;">
+            <button type="button" id="btn-browse-file" class="action-btn btn-secondary">
+              Browse File
+            </button>
+          </div>
+
+          <!-- Quick Actions -->
+          <div class="zero-actions-row">
+            <div class="zero-divider-row"><span>or</span></div>
+            <button type="button" id="btn-load-sample-dataset" class="action-btn btn-sample-corridor" title="Load sample dataset directly">
+              <i class="fa-solid fa-bolt"></i> Load Sample Data
+            </button>
+            <a href="/api/graph/sample-download" download="trishuli_flood_dataset.json" class="sample-download-link" title="Download sample JSON file">
+              <i class="fa-solid fa-download"></i> Download sample dataset (.json)
+            </a>
+          </div>
+
+          <!-- Live Ingestion Terminal Log -->
+          <div id="ingest-terminal" class="ingest-terminal hidden">
+            <div class="terminal-header">
+              <span class="terminal-dot green"></span>
+              <span class="terminal-title">Data Ingestion Stream</span>
+            </div>
+            <pre id="ingest-terminal-output" class="terminal-body"></pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Full-Bleed Map Viewport -->
+      <section id="map-panel" class="map-viewport">
+        <!-- Floating Glass Top Control Bar -->
+        <div class="map-floating-bar">
+          <div class="map-brand-tag">
+            <i class="fa-solid fa-satellite"></i> <span>Satellite & Lifelines</span>
+          </div>
+          <div class="bridge-filter-pills" id="bridge-filter-group">
+            <button class="pill-btn active" data-filter="ALL" title="Show all 58 surveyed bridges">All (58)</button>
+            <button class="pill-btn pill-danger" data-filter="Washed out" title="Show 39 washed out bridges"><i class="fa-solid fa-water"></i> Washed Out (39)</button>
+            <button class="pill-btn pill-warning" data-filter="Damaged" title="Show 4 damaged bridges">Damaged (4)</button>
+            <button class="pill-btn pill-success" data-filter="Intact" title="Show 15 intact bridges">Intact (15)</button>
+          </div>
+          <button id="btn-toggle-osm-roads" class="pill-btn pill-osm active" title="Toggle HOT OpenStreetMap surveyed flood road centerlines (PMTiles vector network)">
+            <i class="fa-solid fa-road"></i> <span>OSM Survey Lines</span>
+          </button>
+          <button id="btn-fit-map" class="icon-btn" title="Center Map on Trishuli Corridor">
+            <i class="fa-solid fa-compress"></i>
+          </button>
+        </div>
+
+        <div id="map"></div>
+
+        <div class="map-footer-overlay">
+          <div class="map-legend-pills">
+            <span class="legend-chip"><span class="chip-line line-passable"></span> Passable Lifeline</span>
+            <span class="legend-chip"><span class="chip-line line-blocked"></span> Blocked Cut-Edge</span>
+            <span class="legend-chip"><span class="chip-line line-disputed"></span> Disputed / Unverified</span>
+          </div>
+          <span id="map-selection-hint"><i class="fa-solid fa-arrow-pointer"></i> Click any road, bridge, or settlement to inspect</span>
+        </div>
+
+        <!-- Minimalist Edge Launcher Rail (Click anywhere along right edge to expand dock) -->
+        <div id="btn-dock-launcher" class="dock-edge-launcher hidden" title="Expand Side Dock (⌥D)">
+          <div class="launcher-rail-handle">
+            <span class="launcher-pill"></span>
+            <i class="fa-solid fa-chevron-left"></i>
+          </div>
+        </div>
+      </section>
+
+      <!-- Sliding Glass Side Dock -->
+      <aside id="side-dock" class="side-dock">
+        <!-- Full-Height Left Border Toggle Strip (Click to collapse dock) -->
+        <div id="dock-left-toggle-bar" class="dock-left-toggle-bar" title="Click to collapse side dock">
+          <div class="dock-left-toggle-handle">
+            <i class="fa-solid fa-chevron-right"></i>
+          </div>
+        </div>
+        <!-- Dock Header: Segmented Pill Navigation + Collapse Button -->
+        <div class="dock-header">
+          <nav class="dock-segmented-control" role="tablist">
+            <button id="tab-btn-agent" class="tab-btn active" data-tab="tab-agent" title="Badi AI Agent Console">
+              <i class="fa-solid fa-robot"></i> <span>Agent</span>
+            </button>
+            <button id="tab-btn-missions" class="tab-btn" data-tab="tab-missions" title="Priority Field Missions">
+              <i class="fa-solid fa-list-check"></i> <span>Missions</span>
+              <span id="missions-count-badge" class="badge-count">6</span>
+            </button>
+            <button id="tab-btn-inspector" class="tab-btn" data-tab="tab-inspector" title="Evidence & Cypher Inspector">
+              <i class="fa-solid fa-circle-info"></i> <span>Inspector</span>
+            </button>
+            <button id="tab-btn-memory" class="tab-btn" data-tab="tab-memory" title="Episodic Graph Memory">
+              <i class="fa-solid fa-timeline"></i> <span>Memory</span>
+            </button>
+          </nav>
+          <button id="btn-collapse-dock" class="dock-collapse-btn" title="Collapse Dock">
+            <i class="fa-solid fa-chevron-right"></i>
+          </button>
+        </div>
+
+        <!-- Tab Content Panes -->
+        <div class="tab-content-wrapper">
+          <!-- Tab 1: Grounded Badi Agent Console -->
+          <div id="tab-agent" class="tab-pane active">
+            <div class="agent-hero">
+              <div class="agent-avatar-ring">
+                <i class="fa-solid fa-shield-cat"></i>
+              </div>
+              <div class="agent-hero-text">
+                <div class="agent-hero-title">
+                  <span id="active-agent-role">Route Analyst & Field Coordinator</span>
+                  <span class="agent-live-badge"><span class="live-dot"></span> Live Graph</span>
+                </div>
+                <div class="agent-hero-subtitle">Grounded route analysis and field verification for flood response</div>
+              </div>
+            </div>
+
+            <!-- Horizontal Preset Chip Slider (Apple chip rail) -->
+            <div class="presets-rail-container">
+              <div class="presets-rail-header">
+                <span class="presets-rail-title"><i class="fa-solid fa-bolt-lightning"></i> Quick Verification Presets</span>
+                <span class="presets-rail-hint">Scroll or tap</span>
+              </div>
+              <div class="presets-chip-rail" id="presets-chip-rail">
+                <button class="preset-chip preset-btn" data-query="Trace hospital access for Syabrubesi">
+                  <span class="chip-icon"><i class="fa-solid fa-hospital"></i></span> Trace Syabrubesi Access
+                </button>
+                <button class="preset-chip preset-btn" data-query="What is the blast radius if Syabrubesi–Dhunche Hwy is blocked?">
+                  <span class="chip-icon"><i class="fa-solid fa-burst"></i></span> Blast Radius (Syabru-Dhunche)
+                </button>
+                <button class="preset-chip preset-btn" data-query="Recall recent episodic memory events">
+                  <span class="chip-icon"><i class="fa-solid fa-brain"></i></span> Recall Graph Memories
+                </button>
+                <button class="preset-chip preset-btn" data-query="Connect people, projects, and decisions for Syabrubesi–Dhunche">
+                  <span class="chip-icon"><i class="fa-solid fa-people-arrows"></i></span> Connect People & Decisions
+                </button>
+                <button class="preset-chip preset-btn" data-query="How many casualties occurred in Rasuwa?">
+                  <span class="chip-icon"><i class="fa-solid fa-shield"></i></span> Casualty Test (Refusal)
+                </button>
+              </div>
+            </div>
+
+            <!-- Chat Message Feed -->
+            <div id="chat-messages" class="chat-messages-container">
+              <div class="chat-bubble agent-bubble">
+                <div class="bubble-header">
+                  <span class="agent-name"><i class="fa-solid fa-shield-halved"></i> Badi Assistant</span>
+                  <span class="timestamp">System Initialized</span>
+                </div>
+                <div class="bubble-body">
+                  <p>Namaste. I am Badi, your flood response assistant connected to the live corridor graph.</p>
+                  <p>Every response is verified against live graph paths and recorded field observations.</p>
+                  <p class="agent-tip-note"><i class="fa-solid fa-lightbulb"></i> Try tapping a preset above or asking about hospital route availability, road blockages, or field missions.</p>
+                </div>
+              </div>
+            </div>
+
+            <!-- Chat Input Form -->
+            <form id="agent-input-form" class="agent-input-form">
+              <div class="input-glass-pill">
+                <input type="text" id="agent-input-text" placeholder="Ask about hospital paths, cut-edges, or memories..." autocomplete="off" required>
+                <button type="submit" id="btn-agent-send" class="btn-send-pill" title="Send Query">
+                  <i class="fa-solid fa-arrow-up"></i>
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <!-- Tab 2: Priority Field Missions -->
+          <div id="tab-missions" class="tab-pane">
+            <div class="tab-pane-header">
+              <div class="tab-pane-title">
+                <i class="fa-solid fa-list-check"></i> Priority Field Missions
+              </div>
+              <button id="btn-refresh-missions" class="icon-btn-minimal" title="Refresh Missions">
+                <i class="fa-solid fa-arrows-rotate"></i>
+              </button>
+            </div>
+            <!-- Recon Filter Pills -->
+            <div class="recon-filter-rail" id="recon-filter-group">
+              <button class="pill-btn active" data-recon-filter="ALL">All Missions (<span id="count-recon-all">6</span>)</button>
+              <button class="pill-btn pill-danger" data-recon-filter="LIFELINE">Sole Lifelines (<span id="count-recon-lifelines">2</span>)</button>
+              <button class="pill-btn pill-warning" data-recon-filter="CRITICAL">Critical &gt;80 (<span id="count-recon-critical">3</span>)</button>
+            </div>
+            <div id="missions-container" class="scrollable-container">
+              <div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i> Loading ranked missions...</div>
+            </div>
+          </div>
+
+          <!-- Tab 3: Evidence & Cypher Inspector -->
+          <div id="tab-inspector" class="tab-pane">
+            <div id="inspector-empty-state" class="empty-state">
+              <i class="fa-solid fa-route empty-icon"></i>
+              <h4>No Element Selected</h4>
+              <p>Select any road segment, surveyed bridge, or settlement on the map or mission queue to view its full evidence chain and live Cypher query.</p>
+            </div>
+
+            <!-- Road Element Inspector -->
+            <div id="inspector-details" class="inspector-details hidden">
+              <!-- Selected Element Header -->
+              <div class="inspector-header">
+                <span id="insp-type-badge" class="pill-badge">ROAD</span>
+                <h3 id="insp-title">Syabrubesi–Dhunche Hwy</h3>
+                <div id="insp-status-badge" class="status-pill verified">verified_passable</div>
+              </div>
+
+              <!-- Metrics Grid -->
+              <div id="insp-metrics-grid" class="metrics-grid">
+                <!-- Populated dynamically -->
+              </div>
+
+              <!-- Downstream / Dependent Settlements -->
+              <div class="inspector-section">
+                <h4 class="section-title"><i class="fa-solid fa-users"></i> Downstream Settlements At Risk</h4>
+                <div id="insp-affected-list" class="tag-list">
+                  <span class="empty-tag">None directly dependent</span>
+                </div>
+              </div>
+
+              <!-- Surveyed Bridges along Segment -->
+              <div id="insp-bridges-section" class="inspector-section">
+                <h4 class="section-title"><i class="fa-solid fa-bridge-water"></i> Surveyed Bridges along Segment</h4>
+                <div id="insp-bridges-list" class="inspector-bridges-list">
+                  <span class="empty-tag">No individual bridge surveyed</span>
+                </div>
+              </div>
+
+              <!-- Observation Evidence Chain -->
+              <div class="inspector-section">
+                <h4 class="section-title"><i class="fa-solid fa-file-shield"></i> Observation Evidence Chain</h4>
+                <div id="insp-obs-list" class="obs-timeline">
+                  <!-- Populated dynamically -->
+                </div>
+              </div>
+
+              <!-- Manual Observation Form -->
+              <div class="inspector-section form-section">
+                <h4 class="section-title"><i class="fa-solid fa-satellite-dish"></i> Record Field Observation</h4>
+                <form id="form-add-observation">
+                  <input type="hidden" id="obs-road-id">
+                  <div class="form-row">
+                    <label for="obs-status">Reported Status</label>
+                    <select id="obs-status" required>
+                      <option value="verified_passable">✓ Verified Passable</option>
+                      <option value="blocked">✕ Blocked</option>
+                      <option value="unknown">? Unknown</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label for="obs-source">Source Authority</label>
+                    <select id="obs-source" required>
+                      <option value="src_scout">Field Recon Scout Unit (src_scout)</option>
+                      <option value="src_ndrrma">NDRRMA Field Bulletin (src_ndrrma)</option>
+                      <option value="src_hotosm">HOTOSM Nepal Flood Mapping (src_hotosm)</option>
+                    </select>
+                  </div>
+                  <div class="form-row">
+                    <label for="obs-note">Scout Note / Evidence</label>
+                    <textarea id="obs-note" rows="2" placeholder="e.g. Cleared 1-lane bypass with local excavator at km 4" required></textarea>
+                  </div>
+                  <div class="form-row checkbox-row">
+                    <input type="checkbox" id="obs-override">
+                    <label for="obs-override" title="Ground scout reports with override authority resolve disputes">Authoritative Scout Override (Resolves Disputes)</label>
+                  </div>
+                  <button type="submit" id="btn-submit-observation" class="action-btn btn-primary full-width">
+                    <i class="fa-solid fa-cloud-arrow-up"></i> Submit & Sync FalkorDB
+                  </button>
+                </form>
+              </div>
+
+              <!-- Live Cypher Query Codebox -->
+              <div class="inspector-section">
+                <div class="code-header">
+                  <span><i class="fa-solid fa-code"></i> FalkorDB Cypher Executed</span>
+                  <button id="btn-copy-cypher" class="copy-btn" title="Copy Cypher"><i class="fa-regular fa-copy"></i></button>
+                </div>
+                <pre class="cypher-codebox"><code id="insp-cypher-code">// Cypher query will appear here</code></pre>
+              </div>
+            </div>
+
+            <!-- Surveyed Bridge Inspector -->
+            <div id="inspector-bridge-details" class="inspector-details hidden">
+              <div class="inspector-header">
+                <span id="bridge-type-badge" class="pill-badge pill-badge-bridge">SURVEYED BRIDGE</span>
+                <h3 id="bridge-title">Mailung Khola Bridge</h3>
+                <div id="bridge-status-badge" class="status-pill blocked">Washed out</div>
+              </div>
+
+              <div id="bridge-metrics-grid" class="metrics-grid">
+                <!-- Populated dynamically -->
+              </div>
+
+              <div class="inspector-section">
+                <h4 class="section-title"><i class="fa-solid fa-route"></i> Associated FalkorDB Lifeline Corridor</h4>
+                <div id="bridge-lifeline-card" class="bridge-lifeline-card">
+                  <!-- Populated dynamically -->
+                </div>
+              </div>
+
+              <div class="inspector-section">
+                <h4 class="section-title"><i class="fa-solid fa-database"></i> Survey Source & Provenance</h4>
+                <div class="obs-card">
+                  <div class="obs-source">HOTOSM Nepal Flood Survey (PMTiles) &amp; NDRRMA Bulletin</div>
+                  <div class="obs-note">Assessed during the Trishuli-Bhote Koshi flash flood surge. Bridges marked washed out represent high-risk bottlenecks directly severing downstream relief corridors.</div>
+                </div>
+              </div>
+
+              <div class="inspector-section">
+                <div class="code-header">
+                  <span><i class="fa-solid fa-code"></i> FalkorDB Cypher Executed</span>
+                  <button id="btn-copy-bridge-cypher" class="copy-btn" title="Copy Cypher"><i class="fa-regular fa-copy"></i></button>
+                </div>
+                <pre class="cypher-codebox"><code id="bridge-cypher-code">// Cypher query will appear here</code></pre>
+              </div>
+            </div>
+          </div>
+
+          <!-- Tab 4: Episodic Memory (Track 02) -->
+          <div id="tab-memory" class="tab-pane">
+            <div class="tab-pane-header">
+              <div class="tab-pane-title">
+                <i class="fa-solid fa-timeline"></i> Episodic Memory Timeline
+              </div>
+              <button id="btn-refresh-memory" class="icon-btn-minimal" title="Refresh Timeline">
+                <i class="fa-solid fa-arrows-rotate"></i>
+              </button>
+            </div>
+            <div id="memory-timeline-container" class="memory-timeline">
+              <div class="loading-spinner"><i class="fa-solid fa-spinner fa-spin"></i> Loading episodic memories...</div>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <!-- Global Toast Notifications -->
+    <div id="toast-container"></div>
+
+    <!-- Wipe Graph Confirmation Modal -->
+    <div id="wipe-modal" class="modal-backdrop hidden">
+      <div class="modal-card">
+        <div class="modal-icon-danger">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        </div>
+        <h3 class="modal-title">Wipe FalkorDB Graph?</h3>
+        <p class="modal-desc">
+          This will execute <code>MATCH (n) DETACH DELETE n</code> on graph <strong>badi_trishuli_graph</strong>.
+          All nodes, edges, reconnaissance missions, and episodic memories will be erased, returning the application to the Zero State.
+        </p>
+        <div class="modal-actions">
+          <button type="button" id="btn-cancel-wipe" class="action-btn btn-secondary">Cancel</button>
+          <button type="button" id="btn-confirm-wipe" class="action-btn btn-danger">
+            <i class="fa-solid fa-trash-can"></i> Wipe to Zero State
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MapLibre GL & PMTiles (Local offline-ready with CDN fallback) -->
+  <script src="vendor/maplibre/maplibre-gl.js"></script>
+  <script src="vendor/maplibre/pmtiles.js"></script>
+  <script>
+    if (typeof maplibregl === "undefined") {
+      document.write('<script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"><\\/script>');
+      document.write('<script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"><\\/script>');
+    }
+  </script>
+  <!-- Application Logic -->
+  <script src="app.js"></script>
+</body>
+</html>

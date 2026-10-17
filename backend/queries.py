@@ -1,3 +1,5 @@
+import re
+import difflib
 import uuid
 import json
 from pathlib import Path
@@ -819,6 +821,29 @@ def get_bridge_damage_summary() -> Dict[str, Any]:
             "cypher_executed": cypher
         }
 
+def get_on_site_facilities(settlement_id: str) -> List[Dict[str, Any]]:
+    """
+    Returns healthcare facilities directly situated at this settlement/location.
+    """
+    if not settlement_id:
+        return []
+    graph = get_graph()
+    cypher = (
+        "MATCH (f:Facility)-[:AT_LOCATION]->(l:Location {id: $settlement_id}) "
+        "RETURN f.id, f.name, f.type, f.importance_weight"
+    )
+    res = graph.query(cypher, {"settlement_id": settlement_id})
+    facs = []
+    if res and res.result_set:
+        for row in res.result_set:
+            facs.append({
+                "id": str(row[0]),
+                "name": str(row[1]),
+                "type": str(row[2]) if row[2] else "facility",
+                "importance_weight": float(row[3]) if row[3] is not None else 1.0
+            })
+    return facs
+
 LOCATION_ALIASES: Dict[str, str] = {
     "syabrubesi": "loc_syabrubesi",
     "timure": "loc_timure",
@@ -832,7 +857,19 @@ LOCATION_ALIASES: Dict[str, str] = {
     "kalikasthan": "loc_kalikasthan",
     "betrawati": "loc_betrawati",
     "bidur": "loc_bidur",
-    "devighat": "loc_devighat"
+    "devighat": "loc_devighat",
+    "trishuli": "loc_bidur",
+    "trisuli": "loc_bidur",
+    # Facility-specific aliases
+    "betrawati hospital": "loc_betrawati",
+    "betrawati health post": "loc_betrawati",
+    "betrawati clinic": "loc_betrawati",
+    "trishuli hospital": "loc_bidur",
+    "trisuli hospital": "loc_bidur",
+    "bidur hospital": "loc_bidur",
+    "rasuwa hospital": "loc_dhunche",
+    "rasuwa district hospital": "loc_dhunche",
+    "dhunche hospital": "loc_dhunche"
 }
 
 ROAD_ALIASES: Dict[str, str] = {
@@ -856,6 +893,21 @@ ROAD_ALIASES: Dict[str, str] = {
     "devighat-bidur": "road_devighat_bidur"
 }
 
+SETTLEMENT_CANONICAL_NAMES: Dict[str, str] = {
+    "loc_syabrubesi": "Syabrubesi",
+    "loc_timure": "Timure",
+    "loc_briddhim": "Briddhim",
+    "loc_goljung": "Goljung",
+    "loc_gatlang": "Gatlang",
+    "loc_dhunche": "Dhunche",
+    "loc_mailung": "Mailung",
+    "loc_kispang": "Kispang",
+    "loc_kalikasthan": "Kalikasthan",
+    "loc_betrawati": "Betrawati",
+    "loc_bidur": "Bidur / Trishuli",
+    "loc_devighat": "Devighat"
+}
+
 def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], List[str]]:
     """
     Deterministically resolves a settlement identifier or alias.
@@ -868,9 +920,11 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
     clean = name_or_alias.strip().lower()
     # 1. Exact match on ID
     if clean.startswith("loc_"):
+        if clean in SETTLEMENT_CANONICAL_NAMES:
+            return clean, SETTLEMENT_CANONICAL_NAMES[clean], []
         for alias, lid in LOCATION_ALIASES.items():
             if lid == clean:
-                return lid, alias.capitalize(), []
+                return lid, SETTLEMENT_CANONICAL_NAMES.get(lid, alias.capitalize()), []
         try:
             g = get_graph()
             check = g.query("MATCH (s:Location {id: $id}) RETURN s.name", {"id": clean})
@@ -882,7 +936,8 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
 
     # 2. Exact match on alias
     if clean in LOCATION_ALIASES:
-        return LOCATION_ALIASES[clean], clean.capitalize(), []
+        lid = LOCATION_ALIASES[clean]
+        return lid, SETTLEMENT_CANONICAL_NAMES.get(lid, clean.capitalize()), []
 
     # 3. Substring match
     candidates = []
@@ -890,9 +945,11 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
         if alias in clean or clean in alias:
             candidates.append((alias, lid))
 
-    if len(candidates) == 1:
-        return candidates[0][1], candidates[0][0].capitalize(), []
-    elif len(candidates) > 1:
+    unique_lids = list(dict.fromkeys(c[1] for c in candidates))
+    if len(unique_lids) == 1:
+        lid = unique_lids[0]
+        return lid, SETTLEMENT_CANONICAL_NAMES.get(lid, candidates[0][0].capitalize()), []
+    elif len(unique_lids) > 1:
         return None, None, [c[0].capitalize() for c in candidates]
 
     # 4. Fuzzy match close candidates
@@ -900,7 +957,8 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
     fuzzy = difflib.get_close_matches(clean, list(LOCATION_ALIASES.keys()), n=3, cutoff=0.6)
     if len(fuzzy) == 1:
         matched_alias = fuzzy[0]
-        return LOCATION_ALIASES[matched_alias], matched_alias.capitalize(), []
+        lid = LOCATION_ALIASES[matched_alias]
+        return lid, SETTLEMENT_CANONICAL_NAMES.get(lid, matched_alias.capitalize()), []
 
     return None, None, [f.capitalize() for f in fuzzy] if fuzzy else list(LOCATION_ALIASES.keys())[:5]
 
@@ -983,3 +1041,233 @@ def resolve_road_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], L
         return ROAD_ALIASES[matched], matched.replace("-", "–").title(), []
 
     return None, None, [f.replace("-", "–").title() for f in fuzzy] if fuzzy else list(ROAD_ALIASES.keys())[:5]
+
+_LOCATION_CATALOG_CACHE = None
+_LOCATION_CATALOG_TIME = 0.0
+
+def get_dynamic_location_catalog() -> Dict[str, str]:
+    """
+    Retrieves all Locations directly from FalkorDB.
+    Returns mapping of lowercase alias/name -> location_id.
+    Cached for 30 seconds to support dynamic graph imports without latency.
+    """
+    global _LOCATION_CATALOG_CACHE, _LOCATION_CATALOG_TIME
+    import time
+    now = time.time()
+    if _LOCATION_CATALOG_CACHE is not None and (now - _LOCATION_CATALOG_TIME) < 30.0:
+        return _LOCATION_CATALOG_CACHE
+
+    catalog = dict(LOCATION_ALIASES)
+    try:
+        g = get_graph()
+        res = g.query("MATCH (l:Location) RETURN l.id, l.name")
+        if res and res.result_set:
+            for row in res.result_set:
+                lid = str(row[0])
+                lname = str(row[1])
+                catalog[lname.lower()] = lid
+                for part in re.split(r"[\s/–-]+", lname.lower()):
+                    if len(part) >= 3 and part not in catalog:
+                        catalog[part] = lid
+    except Exception:
+        pass
+
+    _LOCATION_CATALOG_CACHE = catalog
+    _LOCATION_CATALOG_TIME = now
+    return catalog
+
+def extract_corridor_endpoints(text: str) -> Tuple[Optional[Tuple[str, str]], Optional[Tuple[str, str]]]:
+    """
+    Dynamically extracts origin and destination locations from natural language queries.
+    Returns ((origin_id, origin_name), (dest_id, dest_name)) or (None, None).
+    Handles directionality patterns:
+      - 'reach <B> from <A>' / 'to <B> from <A>' -> origin = A, dest = B
+      - 'from <A> to <B>' / 'between <A> and <B>' -> origin = A, dest = B
+      - default: origin = first_mentioned, dest = second_mentioned
+    """
+    if not text or not isinstance(text, str):
+        return None, None
+
+    clean = text.lower()
+    catalog = get_dynamic_location_catalog()
+
+    # Find all location matches with their character spans in the text
+    matches = []
+    for alias, lid in catalog.items():
+        pattern = r"\b" + re.escape(alias) + r"\b"
+        for m in re.finditer(pattern, clean):
+            matches.append((m.start(), m.end(), alias, lid))
+
+    if not matches:
+        return None, None
+
+    # Filter overlapping matches, preferring longer aliases
+    matches.sort(key=lambda x: (x[0], -(x[1] - x[0])))
+    filtered = []
+    last_end = -1
+    for start, end, alias, lid in matches:
+        if start >= last_end:
+            filtered.append((start, end, alias, lid))
+            last_end = end
+
+    # Group by unique location ID in order of appearance
+    unique_locs = []
+    seen_lids = set()
+    for start, end, alias, lid in filtered:
+        if lid not in seen_lids:
+            seen_lids.add(lid)
+            cname = SETTLEMENT_CANONICAL_NAMES.get(lid, alias.capitalize())
+            unique_locs.append((start, lid, cname))
+
+    if len(unique_locs) == 0:
+        return None, None
+    if len(unique_locs) == 1:
+        return (unique_locs[0][1], unique_locs[0][2]), None
+
+    loc_a = (unique_locs[0][1], unique_locs[0][2])
+    loc_b = (unique_locs[1][1], unique_locs[1][2])
+
+    # Directionality: reach B from A / to B from A
+    reach_from = re.search(r"\b(reach|to|access|go to)\b.*?\bfrom\b", clean)
+    if reach_from:
+        from_idx = clean.find("from")
+        if unique_locs[0][0] < from_idx and unique_locs[1][0] > from_idx:
+            return loc_b, loc_a
+        elif unique_locs[1][0] < from_idx and unique_locs[0][0] > from_idx:
+            return loc_a, loc_b
+
+    # Directionality: from A to B
+    from_to = re.search(r"\bfrom\b.*?\bto\b", clean)
+    if from_to:
+        from_idx = clean.find("from")
+        to_idx = clean.find("to", from_idx)
+        if from_idx < unique_locs[0][0] < to_idx and to_idx < unique_locs[1][0]:
+            return loc_a, loc_b
+        elif from_idx < unique_locs[1][0] < to_idx and to_idx < unique_locs[0][0]:
+            return loc_b, loc_a
+
+    # Default order: first mentioned is origin, second is destination
+    return loc_a, loc_b
+
+def find_route_between(origin_input: str, destination_input: str) -> Dict[str, Any]:
+    """
+    Evaluates topological connectivity and multi-hop paths between two locations.
+    Classifies routes by tier (1=Verified Passable, 2=Needs Recon, 3=Blocked)
+    and cross-references unverified segments with active (:Mission) nodes.
+    """
+    orig_id, orig_name, orig_cands = resolve_settlement_id(origin_input)
+    dest_id, dest_name, dest_cands = resolve_settlement_id(destination_input)
+
+    if not orig_id:
+        return {
+            "status": "unresolved",
+            "message": f"Origin location '{origin_input}' could not be identified in FalkorDB.",
+            "candidates": orig_cands
+        }
+    if not dest_id:
+        return {
+            "status": "unresolved",
+            "message": f"Destination location '{destination_input}' could not be identified in FalkorDB.",
+            "candidates": dest_cands
+        }
+
+    cypher = (
+        "MATCH p = (start:Location {id: $origin_id})-[:ROAD_TO*1..8]->(dest:Location {id: $dest_id}) "
+        "WHERE ALL(n IN nodes(p) WHERE 1 = size([m IN nodes(p) WHERE m = n])) "
+        "WITH p, "
+        "     reduce(total = 0.0, r IN relationships(p) | total + r.length_km) AS total_km, "
+        "     CASE "
+        "       WHEN ALL(r IN relationships(p) WHERE r.status = 'verified_passable') THEN 1 "
+        "       WHEN NONE(r IN relationships(p) WHERE r.status = 'blocked') THEN 2 "
+        "       ELSE 3 "
+        "     END AS route_tier "
+        "RETURN [n IN nodes(p) | {id: n.id, name: n.name}] AS locations, "
+        "       [r IN relationships(p) | {road_id: r.road_id, name: r.road_name, status: r.status, length_km: r.length_km, is_bridge: r.is_bridge}] AS segments, "
+        "       total_km, "
+        "       route_tier "
+        "ORDER BY route_tier ASC, total_km ASC "
+        "LIMIT 6"
+    )
+
+    graph = get_graph()
+    res = graph.query(cypher, {"origin_id": orig_id, "dest_id": dest_id})
+    routes = []
+    all_unverified_rids = set()
+
+    if res and res.result_set:
+        for row in res.result_set:
+            locs = row[0]
+            segs = row[1]
+            total_km = round(float(row[2]), 2)
+            tier = int(row[3])
+
+            tier_label = (
+                "Verified Passable" if tier == 1
+                else "Needs Reconnaissance" if tier == 2
+                else "Severed / Blocked"
+            )
+
+            bottlenecks = [s for s in segs if s["status"] in ["unknown", "disputed", "blocked"]]
+            for b in bottlenecks:
+                if b["status"] in ["unknown", "disputed"]:
+                    all_unverified_rids.add(b["road_id"])
+
+            routes.append({
+                "tier": tier,
+                "tier_label": tier_label,
+                "locations": locs,
+                "location_names": [l["name"] for l in locs],
+                "segments": segs,
+                "road_names": [s["name"] for s in segs],
+                "road_ids": [s["road_id"] for s in segs],
+                "total_km": total_km,
+                "bottlenecks": bottlenecks,
+                "linked_missions": []
+            })
+
+    # Auto-link unverified segments with active (:Mission) nodes in FalkorDB
+    missions_by_rid = {}
+    if all_unverified_rids:
+        try:
+            m_res = graph.query(
+                "MATCH (m:Mission) WHERE m.road_id IN $rids RETURN m.road_id, m.id, m.priority_score, m.reason",
+                {"rids": list(all_unverified_rids)}
+            )
+            if m_res and m_res.result_set:
+                for m_row in m_res.result_set:
+                    missions_by_rid[str(m_row[0])] = {
+                        "road_id": str(m_row[0]),
+                        "mission_id": str(m_row[1]),
+                        "priority_score": float(m_row[2]),
+                        "reason": str(m_row[3])
+                    }
+        except Exception:
+            pass
+
+    for r in routes:
+        for b in r["bottlenecks"]:
+            rid = b["road_id"]
+            if rid in missions_by_rid:
+                r["linked_missions"].append(missions_by_rid[rid])
+
+    if not routes:
+        overall_state = "NO_ROUTE_FOUND"
+    elif any(r["tier"] == 1 for r in routes):
+        overall_state = "VERIFIED_ACCESS"
+    elif any(r["tier"] == 2 for r in routes):
+        overall_state = "NEEDS_RECON"
+    else:
+        overall_state = "SEVERED"
+
+    return {
+        "status": "ok",
+        "origin_id": orig_id,
+        "origin_name": orig_name,
+        "destination_id": dest_id,
+        "destination_name": dest_name,
+        "overall_state": overall_state,
+        "routes_count": len(routes),
+        "routes": routes,
+        "primary_route": routes[0] if routes else None,
+        "cypher_executed": cypher.replace("$origin_id", f"'{orig_id}'").replace("$dest_id", f"'{dest_id}'")
+    }

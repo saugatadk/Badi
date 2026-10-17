@@ -507,7 +507,10 @@ button,
   transition: all 0.2s var(--spring-default);
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 0.35rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 .pill-btn:hover {
   background: rgba(28, 42, 68, 0.85);
@@ -1443,6 +1446,38 @@ button,
   font-size: 0.65rem;
 }
 
+.path-chip.interactive {
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.15s ease, box-shadow 0.15s ease;
+}
+.path-chip.interactive:hover {
+  transform: translateY(-1px) scale(1.05);
+  filter: brightness(1.25);
+  box-shadow: 0 2px 8px rgba(56, 189, 248, 0.35);
+}
+
+/* Animated Marker Path Focus (Pulsing Halo for Settlements / Facilities in queried paths) */
+@keyframes marker-path-pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.95), 0 0 16px rgba(56, 189, 248, 0.7);
+    transform: scale(1);
+  }
+  50% {
+    box-shadow: 0 0 0 16px rgba(56, 189, 248, 0), 0 0 30px rgba(56, 189, 248, 0.95);
+    transform: scale(1.22);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(56, 189, 248, 0), 0 0 16px rgba(56, 189, 248, 0.7);
+    transform: scale(1);
+  }
+}
+
+.settlement-marker.marker-path-focus {
+  animation: marker-path-pulse 1.8s infinite ease-in-out !important;
+  border-color: #38bdf8 !important;
+  z-index: 100 !important;
+}
+
 /* Agent Markdown Table */
 .agent-table-wrapper {
   overflow-x: auto;
@@ -1684,13 +1719,23 @@ button,
 
 .recon-filter-rail {
   display: flex;
-  gap: 0.45rem;
-  padding: 0.55rem 0.85rem;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem;
   margin-bottom: 0.75rem;
-  border-radius: 999px;
+  border-radius: 10px;
   background: rgba(15, 23, 42, 0.6);
   border: 1px solid var(--border-glass);
-  flex-wrap: wrap;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.recon-filter-rail .pill-btn {
+  flex: 1;
+  text-align: center;
+  padding: 0.32rem 0.35rem;
+  font-size: 0.72rem;
+  white-space: nowrap;
 }
 
 .mission-reason {

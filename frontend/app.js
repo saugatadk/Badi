@@ -364,6 +364,8 @@ function renderMapNetwork(data) {
     const isJunction = loc.type === "junction";
     const el = document.createElement("div");
     el.className = `settlement-marker-wrap ${isJunction ? 'wrap-junction' : ''}`;
+    el.setAttribute("data-location-id", loc.id);
+    el.setAttribute("data-location-name", loc.name);
     el.innerHTML = `
       <div class="settlement-label">${loc.name}</div>
       <div class="settlement-marker ${markerClass}">
@@ -826,6 +828,7 @@ function clearRoadHighlight() {
     map.setFilter("network-roads-highlight-dashed", ["all", ["==", ["get", "id"], ""], ["in", ["get", "status"], ["literal", ["unknown", "disputed"]]]]);
   }
   document.querySelectorAll(".mission-card").forEach(c => c.classList.remove("active-mission"));
+  document.querySelectorAll(".settlement-marker").forEach(m => m.classList.remove("marker-path-focus"));
 }
 
 async function selectRoad(roadId) {
@@ -868,6 +871,169 @@ async function selectRoad(roadId) {
     showToast(`Error inspecting road ${roadId}`, "error");
   }
 }
+
+/* ==========================================================================
+   Visual Map Path Focusing & Multi-Segment Highlighting
+   ========================================================================== */
+function focusCorridorOnMap(roadIds, options = {}) {
+  if (!map) return;
+  const ids = Array.isArray(roadIds) ? roadIds.filter(Boolean) : (roadIds ? [roadIds] : []);
+
+  // 1. Highlight all road segments in this corridor
+  if (ids.length > 0) {
+    if (map.getLayer("network-roads-halo")) {
+      map.setFilter("network-roads-halo", ["in", ["get", "id"], ["literal", ids]]);
+    }
+    if (map.getLayer("network-roads-highlight")) {
+      map.setFilter("network-roads-highlight", [
+        "all",
+        ["in", ["get", "id"], ["literal", ids]],
+        ["in", ["get", "status"], ["literal", ["verified_passable", "blocked"]]]
+      ]);
+    }
+    if (map.getLayer("network-roads-highlight-dashed")) {
+      map.setFilter("network-roads-highlight-dashed", [
+        "all",
+        ["in", ["get", "id"], ["literal", ids]],
+        ["in", ["get", "status"], ["literal", ["unknown", "disputed"]]]
+      ]);
+    }
+  }
+
+  // 2. Compute bounding box across all road coordinates and included locations
+  const bounds = new maplibregl.LngLatBounds();
+  let hasCoords = false;
+
+  if (networkState && networkState.road_segments) {
+    networkState.road_segments.forEach(r => {
+      if (ids.includes(r.id) && r.coordinates && r.coordinates.length > 0) {
+        r.coordinates.forEach(c => {
+          bounds.extend(c);
+          hasCoords = true;
+        });
+      }
+    });
+  }
+
+  const locTargets = options.locations || [];
+  if (locTargets.length > 0 && networkState && networkState.locations) {
+    networkState.locations.forEach(loc => {
+      if (locTargets.includes(loc.id) || locTargets.includes(loc.name)) {
+        bounds.extend([loc.lon, loc.lat]);
+        hasCoords = true;
+      }
+    });
+  }
+
+  // 3. Smooth fit bounds with right margin for open side dock
+  if (hasCoords) {
+    const isDockCollapsed = document.getElementById("main-content")?.classList.contains("dock-collapsed");
+    const rightPadding = isDockCollapsed ? 80 : 380;
+
+    map.fitBounds(bounds, {
+      padding: { top: 90, bottom: 90, left: 90, right: rightPadding },
+      maxZoom: options.maxZoom || 13.5,
+      duration: options.duration || 1000
+    });
+  }
+
+  // 4. Highlight specific settlement markers with pulsing animation
+  if (options.settlements && options.settlements.length > 0) {
+    highlightSettlementMarkers(options.settlements);
+  }
+}
+
+function highlightSettlementMarkers(locationIds) {
+  const ids = Array.isArray(locationIds) ? locationIds : [locationIds];
+  document.querySelectorAll(".settlement-marker-wrap").forEach(wrap => {
+    const locId = wrap.getAttribute("data-location-id");
+    const locName = wrap.getAttribute("data-location-name");
+    const marker = wrap.querySelector(".settlement-marker");
+    if (!marker) return;
+    if (ids.includes(locId) || ids.includes(locName)) {
+      marker.classList.add("marker-path-focus");
+      setTimeout(() => marker.classList.remove("marker-path-focus"), 9000);
+    } else {
+      marker.classList.remove("marker-path-focus");
+    }
+  });
+}
+
+function focusMapFromAgentResponse(data) {
+  if (!data || !map) return;
+  const ev = data.supporting_evidence || {};
+
+  // 0. Point-to-Point Corridor Routing (find_route_between)
+  if (ev.primary_route && ev.primary_route.road_ids) {
+    const roadIds = ev.primary_route.road_ids || [];
+    const locs = (ev.primary_route.locations || []).map(l => (typeof l === 'object' ? l.id : l));
+    focusCorridorOnMap(roadIds, {
+      locations: locs,
+      settlements: locs,
+      maxZoom: 13.5
+    });
+    return;
+  }
+
+  // 1. Hospital / Settlement Route Paths
+  if (ev.verified_paths && ev.verified_paths.length > 0) {
+    const p = ev.verified_paths[0];
+    const roadIds = p.road_ids || [];
+    const locs = p.locations || [];
+    focusCorridorOnMap(roadIds, {
+      locations: locs,
+      settlements: locs,
+      maxZoom: 13.5
+    });
+    return;
+  }
+  if (ev.potential_paths && ev.potential_paths.length > 0) {
+    const p = ev.potential_paths[0];
+    const roadIds = p.road_ids || [];
+    const locs = p.locations || [];
+    focusCorridorOnMap(roadIds, {
+      locations: locs,
+      settlements: locs,
+      maxZoom: 13.5
+    });
+    return;
+  }
+
+  // 2. Blast Radius / Road Impact
+  const rid = ev.road_id || (ev.road && ev.road.id);
+  if (rid) {
+    const affLocs = (ev.affected_settlements || []).map(s => s.id || s.name);
+    focusCorridorOnMap([rid], {
+      locations: affLocs,
+      settlements: affLocs,
+      maxZoom: 13.0
+    });
+    return;
+  }
+
+  // 3. Settlement specific query without paths
+  if (ev.settlement_id) {
+    focusCorridorOnMap([], {
+      locations: [ev.settlement_id],
+      settlements: [ev.settlement_id],
+      maxZoom: 14.0
+    });
+    return;
+  }
+
+  // 4. Bridge damage overview
+  if (data.tool_called && (data.tool_called.includes("bridge") || data.tool_called.includes("Bridge"))) {
+    map.flyTo({
+      center: [85.27, 28.12],
+      zoom: 11.2,
+      duration: 1000
+    });
+  }
+}
+
+window.focusCorridorOnMap = focusCorridorOnMap;
+window.highlightSettlementMarkers = highlightSettlementMarkers;
+
 
 function selectBridge(bridgeFeature) {
   if (!bridgeFeature) return;
@@ -1224,10 +1390,6 @@ async function sendAgentQuery(promptText) {
         </div>
       </div>
       <div class="bubble-body selectable-text">${formatMarkdown(data.answer)}</div>
-      <div class="bubble-meta selectable-text">
-        <div><strong>Tool Called:</strong> <code>${escapeHtml(data.tool_called || 'none')}</code></div>
-        ${data.memory_id ? `<div><strong>Episodic Memory Logged:</strong> <code>${escapeHtml(data.memory_id)}</code> (Track 02)</div>` : ''}
-      </div>
       ${data.cypher_executed ? `
       <details class="bubble-path-details" ontoggle="if(this.open){ setTimeout(() => this.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 60); }">
         <summary>
@@ -1239,6 +1401,10 @@ async function sendAgentQuery(promptText) {
           <span class="path-badge">FalkorDB Verified</span>
         </summary>
         <div class="bubble-path-body">
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.72rem; color: var(--text-muted); border-bottom: 1px solid rgba(255,255,255,0.06); padding-bottom: 0.35rem;">
+            <div><strong>Tool Called:</strong> <code>${escapeHtml(data.tool_called || 'none')}</code></div>
+            ${data.memory_id ? `<div><strong>Episodic Memory:</strong> <code>${escapeHtml(data.memory_id)}</code></div>` : ''}
+          </div>
           ${renderPathBreadcrumbs(data.supporting_evidence)}
           <div class="path-section-header">
             <span class="path-title"><i class="fa-solid fa-terminal"></i> Live Cypher Query Executed:</span>
@@ -1256,6 +1422,9 @@ async function sendAgentQuery(promptText) {
       </details>
       ` : ''}
     `;
+
+    // Automatically shift map visual focus to the queried path / road / corridor
+    focusMapFromAgentResponse(data);
 
     // Refresh memory timeline and network in background
     fetchMemories();
@@ -1812,27 +1981,60 @@ function formatMarkdown(raw) {
 function renderPathBreadcrumbs(evidence) {
   if (!evidence || typeof evidence !== "object") return "";
 
+  // 0. Point-to-Point Corridor Route (from find_route_between)
+  if (evidence.primary_route && evidence.primary_route.location_names) {
+    const p = evidence.primary_route;
+    const locs = p.location_names || [];
+    const chips = [];
+    locs.forEach((loc, i) => {
+      const locId = (p.locations && p.locations[i]) ? (p.locations[i].id || p.locations[i]) : loc;
+      chips.push(`<span class="path-chip loc interactive" onclick="focusCorridorOnMap([], { locations: ['${locId}'], settlements: ['${locId}'] })" title="Focus ${escapeHtml(loc)} on map"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(loc)}</span>`);
+      if (i < locs.length - 1) {
+        const roadId = (p.road_ids && p.road_ids[i]) ? p.road_ids[i] : "";
+        const roadName = p.road_names && p.road_names[i] ? p.road_names[i] : "corridor";
+        const seg = p.segments && p.segments[i] ? p.segments[i] : {};
+        const stClass = seg.status === 'verified_passable' ? 'passable' : (seg.status === 'blocked' ? 'blocked' : '');
+        chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
+        chips.push(`<span class="path-chip road ${stClass} interactive" onclick="focusCorridorOnMap(['${roadId}'], { fitBounds: true })" title="Focus ${escapeHtml(roadName)} on map"><i class="fa-solid fa-road"></i> ${escapeHtml(roadName)}</span>`);
+        chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
+      }
+    });
+    const allRoadIds = JSON.stringify(p.road_ids || []);
+    return `
+      <div class="path-section-header">
+        <span class="path-title"><i class="fa-solid fa-route"></i> Transit Corridor Route (${escapeHtml(p.tier_label || 'Calculated')} - ${p.total_km} km):</span>
+        <button class="copy-code-btn" style="color: #38bdf8; border-color: rgba(56,189,248,0.3);" onclick='focusCorridorOnMap(${allRoadIds}, { fitBounds: true })'><i class="fa-solid fa-crosshairs"></i> Focus Route on Map</button>
+      </div>
+      <div class="path-breadcrumbs-box">${chips.join("")}</div>
+    `;
+  }
+
   // 1. Check verified paths to healthcare
   if (evidence.verified_paths && evidence.verified_paths.length > 0) {
     const p = evidence.verified_paths[0];
     const locs = p.location_names || [];
     const chips = [];
     locs.forEach((loc, i) => {
-      chips.push(`<span class="path-chip loc"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(loc)}</span>`);
+      const locId = (p.locations && p.locations[i]) ? p.locations[i] : loc;
+      chips.push(`<span class="path-chip loc interactive" onclick="focusCorridorOnMap([], { locations: ['${locId}'], settlements: ['${locId}'] })" title="Focus ${escapeHtml(loc)} on map"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(loc)}</span>`);
       if (i < locs.length - 1) {
+        const roadId = (p.road_ids && p.road_ids[i]) ? p.road_ids[i] : "";
         const roadName = p.road_names && p.road_names[i] ? p.road_names[i] : "corridor";
         chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
-        chips.push(`<span class="path-chip road passable"><i class="fa-solid fa-road"></i> ${escapeHtml(roadName)}</span>`);
+        chips.push(`<span class="path-chip road passable interactive" onclick="focusCorridorOnMap(['${roadId}'], { fitBounds: true })" title="Focus ${escapeHtml(roadName)} on map"><i class="fa-solid fa-road"></i> ${escapeHtml(roadName)}</span>`);
         chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
       }
     });
     if (p.facility_name) {
+      const facId = p.facility_id || "";
       chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
-      chips.push(`<span class="path-chip fac"><i class="fa-solid fa-hospital"></i> ${escapeHtml(p.facility_name)} (${p.total_km} km)</span>`);
+      chips.push(`<span class="path-chip fac interactive" onclick="focusCorridorOnMap([], { locations: ['${facId}'], settlements: ['${facId}'] })" title="Focus ${escapeHtml(p.facility_name)} on map"><i class="fa-solid fa-hospital"></i> ${escapeHtml(p.facility_name)} (${p.total_km} km)</span>`);
     }
+    const allRoadIds = JSON.stringify(p.road_ids || []);
     return `
       <div class="path-section-header">
         <span class="path-title"><i class="fa-solid fa-route"></i> Verified Topological Path:</span>
+        <button class="copy-code-btn" style="color: #38bdf8; border-color: rgba(56,189,248,0.3);" onclick='focusCorridorOnMap(${allRoadIds}, { fitBounds: true, settlements: ${JSON.stringify(p.locations || [])} })'><i class="fa-solid fa-crosshairs"></i> Focus Route on Map</button>
       </div>
       <div class="path-breadcrumbs-box">${chips.join("")}</div>
     `;
@@ -1844,20 +2046,26 @@ function renderPathBreadcrumbs(evidence) {
     const locs = p.location_names || [];
     const chips = [];
     locs.forEach((loc, i) => {
-      chips.push(`<span class="path-chip loc"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(loc)}</span>`);
+      const locId = (p.locations && p.locations[i]) ? p.locations[i] : loc;
+      chips.push(`<span class="path-chip loc interactive" onclick="focusCorridorOnMap([], { locations: ['${locId}'], settlements: ['${locId}'] })" title="Focus ${escapeHtml(loc)} on map"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(loc)}</span>`);
       if (i < locs.length - 1) {
+        const roadId = (p.road_ids && p.road_ids[i]) ? p.road_ids[i] : "";
+        const roadName = p.road_names && p.road_names[i] ? p.road_names[i] : "Unverified Segment";
         chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
-        chips.push(`<span class="path-chip road"><i class="fa-solid fa-triangle-exclamation"></i> Unverified Segment</span>`);
+        chips.push(`<span class="path-chip road interactive" onclick="focusCorridorOnMap(['${roadId}'], { fitBounds: true })" title="Focus ${escapeHtml(roadName)} on map"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(roadName)}</span>`);
         chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
       }
     });
     if (p.facility_name) {
+      const facId = p.facility_id || "";
       chips.push(`<span class="path-arrow"><i class="fa-solid fa-arrow-right"></i></span>`);
-      chips.push(`<span class="path-chip fac"><i class="fa-solid fa-hospital"></i> ${escapeHtml(p.facility_name)}</span>`);
+      chips.push(`<span class="path-chip fac interactive" onclick="focusCorridorOnMap([], { locations: ['${facId}'], settlements: ['${facId}'] })" title="Focus ${escapeHtml(p.facility_name)} on map"><i class="fa-solid fa-hospital"></i> ${escapeHtml(p.facility_name)}</span>`);
     }
+    const allRoadIds = JSON.stringify(p.road_ids || []);
     return `
       <div class="path-section-header">
         <span class="path-title"><i class="fa-solid fa-route"></i> Potential Bypass Route:</span>
+        <button class="copy-code-btn" style="color: #fbbf24; border-color: rgba(251,191,36,0.3);" onclick='focusCorridorOnMap(${allRoadIds}, { fitBounds: true, settlements: ${JSON.stringify(p.locations || [])} })'><i class="fa-solid fa-crosshairs"></i> Focus Route on Map</button>
       </div>
       <div class="path-breadcrumbs-box">${chips.join("")}</div>
     `;
@@ -1865,12 +2073,18 @@ function renderPathBreadcrumbs(evidence) {
 
   // 3. Check affected settlements in blast radius
   if (evidence.affected_settlements && evidence.affected_settlements.length > 0) {
-    const chips = evidence.affected_settlements.map(s => 
-      `<span class="path-chip loc"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(s.name || s)} (${s.households || 0} HH)</span>`
-    );
+    const targetRoad = evidence.road_id || "";
+    const affIds = evidence.affected_settlements.map(s => s.id || s);
+    const chips = evidence.affected_settlements.map(s => {
+      const sId = s.id || s;
+      const sName = s.name || s;
+      const hh = s.households ? `(${s.households} HH)` : '';
+      return `<span class="path-chip loc interactive" onclick="focusCorridorOnMap(['${targetRoad}'], { locations: ['${sId}'], settlements: ['${sId}'] })" title="Focus ${escapeHtml(sName)} on map"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtml(sName)} ${hh}</span>`;
+    });
     return `
       <div class="path-section-header">
         <span class="path-title"><i class="fa-solid fa-burst"></i> Cut-Edge Isolated Settlements:</span>
+        <button class="copy-code-btn" style="color: #f87171; border-color: rgba(248,113,113,0.3);" onclick='focusCorridorOnMap(["${targetRoad}"], { fitBounds: true, settlements: ${JSON.stringify(affIds)} })'><i class="fa-solid fa-crosshairs"></i> Focus Blast Radius on Map</button>
       </div>
       <div class="path-breadcrumbs-box">${chips.join("<span class='path-arrow'>•</span>")}</div>
     `;

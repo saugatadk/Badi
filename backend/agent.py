@@ -18,6 +18,9 @@ from backend.queries import (
     get_episodic_memories,
     get_decision_chain,
     get_bridge_damage_summary,
+    get_on_site_facilities,
+    find_route_between,
+    extract_corridor_endpoints,
     LOCATION_ALIASES,
     ROAD_ALIASES,
     resolve_settlement_id,
@@ -66,13 +69,74 @@ Relationships:
 - (e:EpisodicMemory)-[:AFFECTED_ROAD]->(r:RoadSegment)
 """
 
+def get_falkordb_live_context() -> str:
+    """
+    Constructs a real-time snapshot of the active FalkorDB graph state
+    for grounding LLM models (OpenRouter / Gemini) in hard disaster telemetry.
+    """
+    try:
+        g = get_graph()
+        
+        # 1. Locations and surveyed households
+        loc_res = g.query("MATCH (l:Location) RETURN l.id, l.name, l.district, l.households, l.type ORDER BY l.name")
+        loc_rows = loc_res.result_set or []
+        total_hh = sum(r[3] for r in loc_rows if r[3])
+        loc_summary = ", ".join([f"{r[1]} ({r[2]}, {r[3]} hh)" for r in loc_rows])
+        
+        # 2. Roads by status
+        road_res = g.query("MATCH (r:RoadSegment) RETURN r.id, r.name, r.status, r.length_km, r.is_bridge ORDER BY r.status, r.name")
+        road_rows = road_res.result_set or []
+        blocked_roads = [f"{r[1]} (`{r[0]}`)" for r in road_rows if r[2] == "blocked"]
+        passable_roads = [f"{r[1]} (`{r[0]}`)" for r in road_rows if r[2] == "verified_passable"]
+        unknown_roads = [f"{r[1]} (`{r[0]}` - {r[2]})" for r in road_rows if r[2] in ["unknown", "disputed"]]
+        
+        # 3. Bridges
+        bridge_data = get_bridge_damage_summary()
+        
+        # 4. Recon missions (top cut-edges)
+        missions = get_ranked_missions()
+        mission_lines = []
+        for i, m in enumerate(missions[:4], 1):
+            mission_lines.append(
+                f"- Rank {i}: {m.road_name} (`{m.road_id}`) — Priority: {m.priority_score:.1f}/100. "
+                f"Reason: {m.reason}. Sole lifeline for {m.sole_lifeline_count} settlement(s), "
+                f"total dependent: {m.total_dependent_count} settlement(s)."
+            )
+        
+        # 5. Recent Episodic Memories
+        mem_res = g.query("MATCH (e:EpisodicMemory) RETURN e.summary ORDER BY e.timestamp DESC LIMIT 3")
+        recent_mems = [f"- {r[0]}" for r in (mem_res.result_set or [])]
+        mems_str = "\n".join(recent_mems) if recent_mems else "- None recorded yet"
+
+        context_str = (
+            "LIVE FALKORDB DISASTER GRAPH SNAPSHOT (Trishuli & Bhote Koshi Flood Corridor, Nepal):\n"
+            f"1. Surveyed Settlements & Facilities ({len(loc_rows)} locations, ~{total_hh:,} surveyed households):\n"
+            f"   {loc_summary}\n\n"
+            f"2. Road Network Passability ({len(road_rows)} total corridors):\n"
+            f"   - Confirmed Blocked ({len(blocked_roads)}): {', '.join(blocked_roads) or 'None'}\n"
+            f"   - Verified Passable ({len(passable_roads)}): {', '.join(passable_roads) or 'None'}\n"
+            f"   - Unknown / Needs Reconnaissance ({len(unknown_roads)}): {', '.join(unknown_roads) or 'None'}\n\n"
+            f"3. Bridge Infrastructure Survey ({bridge_data.get('total', 0)} surveyed bridges):\n"
+            f"   - Washed Out: {bridge_data.get('washed_out', 0)}\n"
+            f"   - Damaged: {bridge_data.get('damaged', 0)}\n"
+            f"   - Intact: {bridge_data.get('intact', 0)}\n\n"
+            f"4. Priority Reconnaissance Bottlenecks (Active Missions in FalkorDB):\n"
+            + "\n".join(mission_lines) + "\n\n"
+            f"5. Recent Graph Memory & Operational Events:\n"
+            + mems_str
+        )
+        return context_str
+    except Exception as exc:
+        return f"Live FalkorDB Graph Snapshot unavailable: {exc}"
+
+
 # Tool functions with clean, validated signatures (NO default arguments for google-genai schema compatibility)
 def query_bridge_damage() -> Dict[str, Any]:
     """Queries FalkorDB for the live flood damage status counts of all surveyed bridges (Washed out, Damaged, Intact)."""
     return get_bridge_damage_summary()
 
 def trace_settlement_access(settlement_id: str) -> Dict[str, Any]:
-    """Evaluates verified vs potential routes to healthcare facilities for a settlement in FalkorDB."""
+    """Evaluates on-site facilities and verified vs potential routes to healthcare facilities for a settlement in FalkorDB."""
     sid, sname, candidates = resolve_settlement_id(settlement_id)
     if not sid:
         return {
@@ -80,6 +144,9 @@ def trace_settlement_access(settlement_id: str) -> Dict[str, Any]:
             "message": f"Settlement '{settlement_id}' could not be identified in FalkorDB. No access analysis was performed.",
             "candidates": candidates
         }
+
+    # 1. On-site facility check
+    on_site = get_on_site_facilities(sid)
 
     state, reason, v_paths, p_paths = classify_settlement_access(sid)
 
@@ -91,7 +158,7 @@ def trace_settlement_access(settlement_id: str) -> Dict[str, Any]:
             try:
                 g = get_graph()
                 m_res = g.query(
-                    "MATCH (m:Mission) WHERE m.road_id IN $rids RETURN m.road_id, m.priority_score, m.reason",
+                    "MATCH (m:Mission) WHERE m.road_id IN $rids RETURN m.road_id, m.priority_score, m.reason ORDER BY m.priority_score DESC",
                     {"rids": unverified_rids}
                 )
                 if m_res and m_res.result_set:
@@ -107,12 +174,14 @@ def trace_settlement_access(settlement_id: str) -> Dict[str, Any]:
         "settlement_name": sname,
         "access_state": state,
         "access_reason": reason,
+        "on_site_facilities": on_site,
         "verified_paths_count": len(v_paths),
         "potential_paths_count": len(p_paths),
         "verified_paths": [p.model_dump() for p in v_paths],
         "potential_paths": [p.model_dump() for p in p_paths],
         "active_recon_missions": active_missions,
         "cypher_executed": (
+            f"MATCH (f:Facility)-[:AT_LOCATION]->(l:Location {{id: '{sid}'}}); "
             f"MATCH p = (s:Location {{id: '{sid}'}})-[:ROAD_TO*1..7]->(hub:Location)<-[:AT_LOCATION]-(f:Facility) "
             "WHERE ALL(rel IN relationships(p) WHERE rel.status = 'verified_passable') ... (and potential paths query)"
         )
@@ -329,7 +398,68 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
             memory_id=mem_id
         )
 
-    # 2. Bridge Damage Queries 
+    # 2. Point-to-Point Corridor Routing Intent (A to B Transit Pathfinding & Passability)
+    if not any(k in prompt_lower for k in ["blast radius", "impact", "cut off", "what happens if", "blocked if", "depend on"]):
+        ep_orig, ep_dest = extract_corridor_endpoints(prompt)
+        if ep_orig and ep_dest and ep_orig[0] != ep_dest[0]:
+            role = "Route Analyst"
+            orig_id, orig_name = ep_orig
+            dest_id, dest_name = ep_dest
+            evidence = find_route_between(orig_id, dest_id)
+
+            state = evidence.get("overall_state", "NO_ROUTE_FOUND")
+            routes = evidence.get("routes", [])
+
+            header = f"**Transit Corridor: {orig_name} to {dest_name}**\n\n"
+            if state == "NO_ROUTE_FOUND":
+                answer = header + f"• **Status:** No topological path found connecting {orig_name} to {dest_name} in the surveyed network."
+            else:
+                state_label = (
+                    "Verified Passable" if state == "VERIFIED_ACCESS"
+                    else "Needs Reconnaissance" if state == "NEEDS_RECON"
+                    else "Severed / Blocked"
+                )
+                bullets = [f"• **Corridor State:** {state_label}"]
+                for idx, r in enumerate(routes[:3], start=1):
+                    path_str = " -> ".join(r["location_names"])
+                    tier_name = r["tier_label"]
+                    bullets.append(f"\n• **Option {idx} ({tier_name} — {r['total_km']} km):**")
+                    bullets.append(f"  - Route: {path_str}")
+
+                    # Human-readable road names only (no raw IDs in user text)
+                    seg_conditions = []
+                    for seg in r["segments"]:
+                        s_name = seg["name"]
+                        s_st = seg["status"].replace("_", " ").capitalize()
+                        seg_conditions.append(f"{s_name} ({s_st})")
+                    bullets.append(f"  - Road Corridors: {'; '.join(seg_conditions)}")
+
+                    if r.get("linked_missions"):
+                        m_lines = []
+                        for m in r["linked_missions"][:2]:
+                            m_lines.append(f"Active Recon Mission (Priority: {m['priority_score']}/100 — {m['reason'][:80]}...)")
+                        bullets.append(f"  - Reconnaissance: {'; '.join(m_lines)}")
+                answer = header + "\n".join(bullets)
+
+            primary_rid = "corridor"
+            if evidence.get("primary_route") and evidence["primary_route"].get("road_ids"):
+                primary_rid = evidence["primary_route"]["road_ids"][0]
+
+            mem_id = record_episodic_memory(
+                session_id, role, "corridor_route_query",
+                f"Route Analyst evaluated transit corridor between {orig_name} and {dest_name}: {state}.",
+                primary_rid
+            )
+            return AgentQueryResponse(
+                answer=answer,
+                agent_role=role,
+                tool_called="find_route_between",
+                cypher_executed=evidence.get("cypher_executed", "MATCH p = (start:Location)-[:ROAD_TO*1..8]->(dest:Location)..."),
+                supporting_evidence=evidence,
+                memory_id=mem_id
+            )
+
+    # 3. Bridge Damage Queries 
     if any(k in prompt_lower for k in ["bridge", "bridges", "washed out", "destroyed"]):
         role = "Route Analyst"
         summary = get_bridge_damage_summary()
@@ -529,15 +659,44 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
             memory_id=mem_id
         )
 
-    # 7. Hospital / Settlement Access Intent (Explicit access states & verified mission claims)
-    if any(k in prompt_lower for k in ["hospital", "access", "reach", "route", "trace", "path", "evacuat"]):
+    # 7. Road Status Intent (Direct corridor condition & passability query)
+    if any(k in prompt_lower for k in ["status", "condition", "how is", "passable", "blocked", "open", "traffic"]) and not any(k in prompt_lower for k in ["blast radius", "impact", "cut off", "what happens if", "hospital", "access", "reach"]):
+        rid, rname, candidates = resolve_road_id(prompt_lower)
+        if rid:
+            role = "Route Analyst"
+            evidence = inspect_road_evidence(rid)
+            st_raw = evidence.get("status", "unknown")
+            st_clean = st_raw.replace("_", " ").capitalize()
+            km = evidence.get("length_km", 0.0)
+            is_br = evidence.get("is_bridge", False)
+            ends = " -> ".join([e["name"] for e in evidence.get("endpoints", [])])
+            aff_count = len(evidence.get("affected_settlements", []))
+
+            answer = (
+                f"**{rname}: Corridor Status**\n\n"
+                f"• **Status:** {st_clean}\n"
+                f"• **Endpoints:** {ends} ({km} km)\n"
+                f"• **Infrastructure:** {'Bridge structure' if is_br else 'Mountain road corridor'}\n"
+                f"• **Dependent Communities:** {aff_count} settlements depend on this link"
+            )
+            mem_id = record_episodic_memory(session_id, role, "road_status_query", f"Route Analyst checked status of {rid}: {st_raw}.", rid)
+            return AgentQueryResponse(
+                answer=answer,
+                agent_role=role,
+                tool_called="inspect_road_evidence",
+                cypher_executed=evidence.get("cypher_executed", f"MATCH (r:RoadSegment {{id: '{rid}'}}) RETURN r"),
+                supporting_evidence=evidence,
+                memory_id=mem_id
+            )
+
+    # 8. Hospital & Settlement Access Intent (Deterministic sub-20ms FalkorDB execution)
+    if any(k in prompt_lower for k in ["hospital", "health post", "clinic", "access", "reach", "route", "trace", "path", "evacuat", "status", "condition", "how is", "open", "isolated"]):
         role = "Route Analyst"
         sid, sname, candidates = resolve_settlement_id(prompt_lower)
         if not sid:
             avail = ", ".join(candidates[:6])
             answer = (
-                "I could not identify which settlement you want to trace. "
-                "No access evaluation was performed for an unverified location.\n\n"
+                "I could not identify which settlement you are inquiring about.\n\n"
                 f"Available mapped settlements include: {avail}."
             )
             return AgentQueryResponse(
@@ -550,48 +709,56 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
 
         evidence = trace_settlement_access(sid)
         state = evidence["access_state"]
-        p_count = evidence["potential_paths_count"]
+        on_site = evidence.get("on_site_facilities", [])
+        v_paths = evidence.get("verified_paths", [])
+        p_paths = evidence.get("potential_paths", [])
         active_m = evidence.get("active_recon_missions", [])
 
-        if state == "VERIFIED_ACCESS":
-            v_p = evidence["verified_paths"][0]
-            answer = (
-                f"**Settlement {sname} (`{sid}`) Access State: VERIFIED_ACCESS**\n"
-                f"• Verified Route: {' -> '.join(v_p['location_names'])}\n"
-                f"• Target Facility: {v_p['facility_name']} (Total Distance: {v_p['total_km']} km)\n"
-                f"• All intermediate road segments have been confirmed 'verified_passable' in FalkorDB."
-            )
-        elif state == "NEEDS_RECON":
-            mission_notice = ""
-            if active_m:
-                m_details = ", ".join([f"`{m['road_id']}` (Score: {m['priority_score']}/100)" for m in active_m])
-                mission_notice = f"\n• Active Recon Missions verified in FalkorDB for unverified segments: {m_details}."
-            else:
-                mission_notice = "\n• Intermediate corridors require physical reconnaissance before access can be confirmed."
+        # Build clean, accurate, no-slop answer
+        header = f"**{sname}: Health Facility & Access Status**\n\n"
+        bullets = []
 
-            answer = (
-                f"**Settlement {sname} (`{sid}`) Access State: NEEDS_RECON**\n"
-                f"• No 100% verified passable paths exist to healthcare facilities.\n"
-                f"• {p_count} potential unblocked route(s) exist, but contain unverified ('unknown'/'disputed') road segments."
-                f"{mission_notice}"
-            )
-        elif state == "ISOLATED_ON_MAP":
-            answer = (
-                f"**Settlement {sname} (`{sid}`) Access State: ISOLATED_ON_MAP**\n"
-                f"• All mapped topological routes to regional healthcare facilities are confirmed severed by blocked road segments."
-            )
-        elif state == "NO_MAPPED_ROUTE":
-            answer = (
-                f"**Settlement {sname} (`{sid}`) Access State: NO_MAPPED_ROUTE**\n"
-                f"• No mapped road corridors connect {sname} to regional healthcare facilities within the search horizon."
-            )
+        # On-site facility info
+        if on_site:
+            fac_names = ", ".join([f["name"] for f in on_site])
+            bullets.append(f"• **On-Site Facility:** {fac_names}")
         else:
-            answer = (
-                f"**Settlement {sname} (`{sid}`) Access State: {state}**\n"
-                f"• Reason: {evidence.get('access_reason', 'Access information unavailable.')}"
-            )
+            bullets.append("• **On-Site Facility:** None (relies on regional referral)")
 
-        mem_id = record_episodic_memory(session_id, role, "settlement_triage", f"Route Analyst traced access for {sid}: classified as {state}.")
+        # Regional Referral & Corridor access info
+        if state == "VERIFIED_ACCESS":
+            v_p = v_paths[0]
+            route_str = " -> ".join(v_p["location_names"])
+            if on_site and any(f["name"] == v_p["facility_name"] for f in on_site):
+                bullets.append(f"• **Regional Referral:** On-site {v_p['facility_name']} operational")
+            else:
+                bullets.append(f"• **Regional Hospital:** {v_p['facility_name']} ({v_p['total_km']} km via {route_str})")
+            bullets.append("• **Corridor Status:** Open and verified passable")
+
+        elif state == "NEEDS_RECON":
+            if p_paths:
+                p_p = p_paths[0]
+                route_str = " -> ".join(p_p["location_names"])
+                bullets.append(f"• **Nearest Facility:** {p_p['facility_name']} ({p_p['total_km']} km via {route_str})")
+                bullets.append("• **Corridor Status:** Needs Reconnaissance — route contains unverified road segments")
+                if active_m:
+                    m_names = ", ".join([f"`{m['road_id']}` (Priority: {m['priority_score']}/100)" for m in active_m[:2]])
+                    bullets.append(f"• **Active Recon Mission:** {m_names}")
+            else:
+                bullets.append("• **Corridor Status:** Needs Reconnaissance — awaiting field scout survey")
+
+        elif state == "ISOLATED_ON_MAP":
+            bullets.append("• **Access:** Isolated — all mapped routes cut by confirmed road blockages")
+
+        elif state == "NO_MAPPED_ROUTE":
+            bullets.append("• **Access:** No mapped road corridors connect this settlement to regional healthcare hubs")
+
+        else:
+            bullets.append(f"• **Access:** {state} — {evidence.get('access_reason', '')}")
+
+        answer = header + "\n".join(bullets)
+
+        mem_id = record_episodic_memory(session_id, role, "settlement_triage", f"Route Analyst traced access for {sid}: classified as {state}.", sid)
         return AgentQueryResponse(
             answer=answer,
             agent_role=role,
@@ -629,7 +796,13 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
             memory_id=mem_id
         )
 
-    # 9. General FalkorDB Graph Overview Fallback 
+    # 9. General or Analytical Query Fallback: If an LLM is available, delegate to LLM grounded in live FalkorDB context
+    if OPENROUTER_API_KEY:
+        openrouter_res = _execute_openrouter_agent_query(prompt, session_id)
+        if openrouter_res:
+            return openrouter_res
+
+    # Offline / Static Fallback when no LLM API key is present or LLM call fails
     role = "Route Analyst"
     cypher = (
         "MATCH (l:Location) WITH count(l) AS locs "
@@ -666,6 +839,27 @@ def _deterministic_agent_router(prompt: str, session_id: str) -> AgentQueryRespo
     )
 
 OPENROUTER_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "find_route_between",
+            "description": "Calculates connected road routes between any two settlements or hubs in the Trishuli flood corridor, identifying verified passable paths, unverified segments needing reconnaissance with active missions, and blocked corridors.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "origin": {
+                        "type": "string",
+                        "description": "Origin settlement name or ID (e.g. Betrawati, Syabrubesi, Dhunche, Bidur)."
+                    },
+                    "destination": {
+                        "type": "string",
+                        "description": "Destination settlement name or ID (e.g. Syabrubesi, Dhunche, Gatlang, Kispang)."
+                    }
+                },
+                "required": ["origin", "destination"]
+            }
+        }
+    },
     {
         "type": "function",
         "function": {
@@ -790,7 +984,13 @@ OPENROUTER_TOOLS = [
 
 def _dispatch_openrouter_tool(fn_name: str, fn_args: dict, session_id: str = "ops_session") -> Tuple[Dict[str, Any], str]:
     """Executes a validated domain tool call generated by the model against live FalkorDB graph."""
-    if fn_name == "get_settlement_condition":
+    if fn_name == "find_route_between":
+        orig = fn_args.get("origin", "")
+        dest = fn_args.get("destination", "")
+        data = find_route_between(orig, dest)
+        return data, data.get("cypher_executed", "MATCH p = (start:Location)-[:ROAD_TO*1..8]->(dest:Location)...")
+
+    elif fn_name == "get_settlement_condition":
         s_name = fn_args.get("settlement_name", "")
         sid, s_display, candidates = resolve_settlement_id(s_name)
         if not sid:
@@ -891,6 +1091,7 @@ def _validate_and_sanitize_response(
 def _execute_openrouter_agent_query(prompt: str, session_id: str) -> Optional[AgentQueryResponse]:
     """
     Executes grounded agent tool-calling loop using OpenRouter (e.g. NVIDIA Nemotron free model).
+    Directly injects live FalkorDB disaster graph context into the prompt to guarantee factual grounding.
     """
     if not OPENROUTER_API_KEY:
         return None
@@ -900,15 +1101,18 @@ def _execute_openrouter_agent_query(prompt: str, session_id: str) -> Optional[Ag
         if any(k in prompt_lower for k in ["mission", "scout", "triage", "queue", "report", "observe", "verify", "memory", "decision", "update", "blocked", "landslide"]):
             agent_role = "Field Coordinator"
 
+        live_graph_context = get_falkordb_live_context()
+
         system_instruction = (
-            f"You are Badi ({agent_role}), an AI disaster response agent grounded in FalkorDB for flood response in Nepal's Trishuli corridor.\n"
-            f"You have access to predefined FalkorDB domain tools. ALWAYS query or mutate the graph using tools to give accurate facts before answering. Never guess or substitute entities.\n"
-            f"Never assume a road or settlement if the user mentions an unverified name: let the tool report if it is unresolved.\n"
+            f"You are Badi ({agent_role}), an expert disaster response AI grounded in live FalkorDB graph data for the Trishuli & Bhote Koshi flood corridor in Nepal.\n"
+            f"You have direct access to the live FalkorDB disaster graph snapshot below and predefined callable domain tools. Base all factual, topological, and numerical claims strictly on this grounded data. Never guess or fabricate information.\n"
+            f"Never assume a road or settlement if the user mentions an unverified name: use tools or report if it is unmapped in the graph.\n"
             f"When an operator, field scout, or aerial reconnaissance reports a road blockage, passability change, or landslide (e.g. 'found blocked, update this'), call record_road_observation.\n"
             f"Under Epistemic Safety Rules, reports claiming a road is passable cannot mark a road as verified_passable without physical scout survey.\n"
             f"Do not confuse surveyed household counts with total population. Clarify that the graph records household units.\n"
             f"When you receive tool execution results, synthesize a clear, structured markdown summary directly answering the user query without making further tool calls or outputting XML tags.\n"
-            f"Do not output emojis under any circumstances. Keep responses clean, technical, and professional without emoji icons.\n"
+            f"Do not output emojis under any circumstances. Keep responses clean, technical, and professional without emoji icons.\n\n"
+            f"{live_graph_context}\n\n"
             f"{FALKORDB_SCHEMA_PROMPT}"
         )
 
@@ -930,7 +1134,7 @@ def _execute_openrouter_agent_query(prompt: str, session_id: str) -> Optional[Ag
             "temperature": 0.1
         }
 
-        with httpx.Client(timeout=45.0) as client:
+        with httpx.Client(timeout=15.0) as client:
             resp = client.post("https://openrouter.ai/api/v1/chat/completions", headers=headers, json=payload)
             if resp.status_code != 200:
                 return None
@@ -1019,19 +1223,54 @@ def _execute_openrouter_agent_query(prompt: str, session_id: str) -> Optional[Ag
                         session_id=session_id,
                         agent_role=agent_role,
                         event_type="openrouter_agent_direct",
-                        summary=f"{agent_role} responded to query: {prompt[:80]}"
+                        summary=f"{agent_role} responded to query grounded in live FalkorDB graph: {prompt[:80]}"
                     )
                     return AgentQueryResponse(
                         answer=answer,
                         agent_role=agent_role,
-                        tool_called="direct_openrouter_response",
-                        cypher_executed="No tool invocation needed",
-                        supporting_evidence={"model": OPENROUTER_MODEL},
+                        tool_called="openrouter_falkordb_grounded",
+                        cypher_executed="MATCH (l:Location), (r:RoadSegment), (b:Bridge), (m:Mission) ... Live FalkorDB Graph Snapshot Grounding",
+                        supporting_evidence={"model": OPENROUTER_MODEL, "context_grounded": True},
                         memory_id=mem_id
                     )
     except Exception:
         return None
     return None
+
+def _has_direct_operational_intent(prompt_lower: str) -> bool:
+    """Detects if prompt matches an explicit operational query for instant sub-30ms FalkorDB execution."""
+    # 0. High-level briefings, executive summaries, and broad analytical queries should be handled by LLM with full FalkorDB context
+    briefing_keywords = [
+        "briefing", "executive", "sitrep", "situation report", "summary", "summarize",
+        "overview", "overall", "disaster situation", "strategic", "strategy", "comprehensive",
+        "corridor situation", "general situation", "assessment", "state of the corridor"
+    ]
+    if any(k in prompt_lower for k in briefing_keywords):
+        return False
+
+    # 1. Any mention of a known settlement, hospital, or health post
+    for alias in LOCATION_ALIASES.keys():
+        if alias in prompt_lower:
+            return True
+
+    # 2. Any mention of a known road corridor
+    for alias in ROAD_ALIASES.keys():
+        if alias in prompt_lower:
+            return True
+
+    # 3. Explicit operational patterns
+    patterns = [
+        r"\b(hello|hi|namaste|hey|help)\b|who are you|what can you do",
+        r"\b(bridge|bridges|washed out|intact)\b",
+        r"\b(blast radius|impact|cut off|blocked if|what happens if)\b",
+        r"\b(decision chain|connect people|people, projects|chain of decision|decisions connect)\b",
+        r"\b(hospital|health post|clinic|reach.*hospital|access.*hospital|evacuat|trace.*access|path to)\b",
+        r"\b(episodic|recent event|history|recall|memory log)\b",
+        r"\b(mission|missions|recon queue|priority queue|triage queue)\b",
+        r"\b(settlement|settlements|village|households|district|rasuwa|nuwakot)\b",
+        r"\b(passable|blocked|isolated|open)\b"
+    ]
+    return any(re.search(pat, prompt_lower) for pat in patterns)
 
 def execute_agent_query(prompt: str, session_id: str = "ops_session") -> AgentQueryResponse:
     """
@@ -1056,6 +1295,12 @@ def execute_agent_query(prompt: str, session_id: str = "ops_session") -> AgentQu
             supporting_evidence={"reason": "Epistemic Safety Boundary Violation"},
             memory_id=mem_id
         )
+
+    prompt_lower = prompt.lower()
+
+    # Fast Path: Instant sub-30ms execution for operational disaster queries grounded in live FalkorDB Cypher
+    if _has_direct_operational_intent(prompt_lower):
+        return _deterministic_agent_router(prompt, session_id)
 
     # 2. Check if OPENROUTER_API_KEY is available (NVIDIA Nemotron / OpenRouter model)
     if OPENROUTER_API_KEY:

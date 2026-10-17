@@ -109,3 +109,41 @@ def test_population_query_clarifies_households_vs_individuals(monkeypatch):
     monkeypatch.setattr("backend.agent.OPENROUTER_API_KEY", "")
     response = execute_agent_query("What is the population of settlements in Rasuwa district?")
     assert "household" in response.answer.lower()
+
+def test_route_between_betrawati_and_syabrubesi():
+    """
+    P0 Point-to-Point Transit Rule:
+    The agent must calculate topological paths between two settlements,
+    identifying verified passable routes, potential routes with active missions,
+    and severed corridors without raw database IDs in user text.
+    """
+    response = execute_agent_query("can i reach syabrubesi from betrawati")
+    assert response.tool_called == "find_route_between"
+    assert "Transit Corridor: Betrawati to Syabrubesi" in response.answer
+    assert "road_kispang_betrawati" not in response.answer  # No raw road ID in user text
+    assert "road_syabru_dhunche" not in response.answer     # No raw road ID in user text
+    assert "Kispang–Betrawati Steel Bridge" in response.answer
+    assert "Active Recon Mission" in response.answer
+    assert "primary_route" in response.supporting_evidence
+    assert response.supporting_evidence["origin_id"] == "loc_betrawati"
+    assert response.supporting_evidence["destination_id"] == "loc_syabrubesi"
+
+def test_extract_corridor_endpoints_directionality():
+    """
+    P1 Directionality Rule:
+    Extracts origin and destination accurately according to grammatical prepositions.
+    """
+    from backend.queries import extract_corridor_endpoints
+
+    orig1, dest1 = extract_corridor_endpoints("can i reach syabrubesi from betrawati")
+    assert orig1[0] == "loc_betrawati"
+    assert dest1[0] == "loc_syabrubesi"
+
+    orig2, dest2 = extract_corridor_endpoints("how to get to dhunche from bidur")
+    assert orig2[0] == "loc_bidur"
+    assert dest2[0] == "loc_dhunche"
+
+    orig3, dest3 = extract_corridor_endpoints("route from gatlang to kispang")
+    assert orig3[0] == "loc_gatlang"
+    assert dest3[0] == "loc_kispang"
+

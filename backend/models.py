@@ -1,5 +1,6 @@
-from typing import List, Optional, Dict, Any, Literal
-from pydantic import BaseModel, Field
+from typing import Any, Literal, Optional
+
+from pydantic import BaseModel
 
 # Epistemic safety types
 RoadStatus = Literal["verified_passable", "blocked", "unknown", "disputed"]
@@ -9,14 +10,16 @@ SettlementAccessState = Literal[
     "ISOLATED_ON_MAP",
     "NO_MAPPED_ROUTE",
     "UNAVAILABLE",
-    "UNKNOWN"
+    "UNKNOWN",
 ]
+
 
 class SourceModel(BaseModel):
     id: str
     name: str
     url: str
     license: str
+
 
 class ObservationModel(BaseModel):
     id: str
@@ -27,6 +30,7 @@ class ObservationModel(BaseModel):
     note: str
     timestamp: str
     is_simulated: bool = False
+
 
 class LocationModel(BaseModel):
     id: str
@@ -41,12 +45,14 @@ class LocationModel(BaseModel):
     verified_paths_count: int = 0
     potential_paths_count: int = 0
 
+
 class FacilityModel(BaseModel):
     id: str
     name: str
     location_id: str
     type: str  # hospital, health_post
     importance_weight: float
+
 
 class RoadSegmentModel(BaseModel):
     id: str
@@ -56,10 +62,11 @@ class RoadSegmentModel(BaseModel):
     length_km: float
     is_bridge: bool
     status: RoadStatus
-    observations: List[ObservationModel] = []
-    coordinates: Optional[List[List[float]]] = None
-    bridges: List[Dict[str, Any]] = []
+    observations: list[ObservationModel] = []
+    coordinates: Optional[list[list[float]]] = None
+    bridges: list[dict[str, Any]] = []
     bridge_count: int = 0
+
 
 class MissionModel(BaseModel):
     id: str
@@ -72,6 +79,7 @@ class MissionModel(BaseModel):
     status: str = "proposed"
     timestamp: str
 
+
 class EpisodicMemoryModel(BaseModel):
     id: str
     session_id: str
@@ -80,17 +88,19 @@ class EpisodicMemoryModel(BaseModel):
     summary: str
     road_id: Optional[str] = None
     timestamp: str
-    metadata: Dict[str, Any] = {}
+    metadata: dict[str, Any] = {}
+
 
 class PathInfo(BaseModel):
-    locations: List[str]
-    location_names: List[str]
-    road_ids: List[str]
-    road_names: List[str]
+    locations: list[str]
+    location_names: list[str]
+    road_ids: list[str]
+    road_names: list[str]
     total_km: float
     facility_id: str
     facility_name: str
-    unverified_road_ids: List[str] = []
+    unverified_road_ids: list[str] = []
+
 
 class SettlementAccessResponse(BaseModel):
     settlement_id: str
@@ -99,17 +109,19 @@ class SettlementAccessResponse(BaseModel):
     district: str
     access_state: SettlementAccessState
     access_reason: str
-    verified_paths: List[PathInfo]
-    potential_paths: List[PathInfo]
+    verified_paths: list[PathInfo]
+    potential_paths: list[PathInfo]
     cypher_executed: str
+
 
 class RoadEvidenceResponse(BaseModel):
     road: RoadSegmentModel
-    endpoints: List[LocationModel]
-    observations: List[ObservationModel]
-    memories: List[EpisodicMemoryModel]
-    affected_settlements: List[Dict[str, Any]]
+    endpoints: list[LocationModel]
+    observations: list[ObservationModel]
+    memories: list[EpisodicMemoryModel]
+    affected_settlements: list[dict[str, Any]]
     cypher_executed: str
+
 
 class AddObservationRequest(BaseModel):
     road_id: str
@@ -119,17 +131,20 @@ class AddObservationRequest(BaseModel):
     is_simulated: bool = False
     override: bool = False
 
+
 class AgentQueryRequest(BaseModel):
     prompt: str
     session_id: Optional[str] = "default_session"
+
 
 class AgentQueryResponse(BaseModel):
     answer: str
     agent_role: str
     tool_called: Optional[str] = None
     cypher_executed: Optional[str] = None
-    supporting_evidence: Dict[str, Any] = {}
+    supporting_evidence: dict[str, Any] = {}
     memory_id: Optional[str] = None
+
 
 class KPISummary(BaseModel):
     verified_settlements: int = 0
@@ -142,15 +157,17 @@ class KPISummary(BaseModel):
     active_missions: int = 0
     episodic_memories: int = 0
 
+
 class NetworkResponse(BaseModel):
-    locations: List[LocationModel]
-    facilities: List[FacilityModel]
-    road_segments: List[RoadSegmentModel]
+    locations: list[LocationModel]
+    facilities: list[FacilityModel]
+    road_segments: list[RoadSegmentModel]
     kpis: KPISummary
     timestamp: str
     is_empty: bool = False
-    building_summary: Optional[Dict[str, Any]] = None
-    bridge_summary: Optional[Dict[str, Any]] = None
+    building_summary: Optional[dict[str, Any]] = None
+    bridge_summary: Optional[dict[str, Any]] = None
+
 
 class GraphWipeResponse(BaseModel):
     status: str
@@ -158,8 +175,9 @@ class GraphWipeResponse(BaseModel):
     is_empty: bool = True
     timestamp: str
 
+
 class GraphImportResponse(BaseModel):
     status: str
     message: str
-    imported_counts: Dict[str, Any]
+    imported_counts: dict[str, Any]
     timestamp: str

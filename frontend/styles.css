@@ -1,7 +1,4 @@
-/* ==========================================================================
-   Badi (बाढी) - Apple-Crafted Emergency Graph Console
-   Design System: Translucent Materials, Physical Springs, Optical Typography
-   ========================================================================== */
+/* Badi (बाढी) Emergency Response Console Design Tokens */
 
 :root {
   /* Surface Materials & Glass Tokens */
@@ -141,9 +138,7 @@ button,
   background: radial-gradient(circle at 50% 0%, #111a2e 0%, #070b14 70%);
 }
 
-/* ==========================================================================
-   Header Styling (Translucent Frosted Glass Chrome)
-   ========================================================================== */
+/* Header and navigation chrome */
 #main-header {
   height: var(--header-height);
   background: rgba(13, 19, 33, 0.82);
@@ -224,9 +219,7 @@ button,
   letter-spacing: 0.01em;
 }
 
-/* ==========================================================================
-   Apple Glance Capsule (Consolidated Header Metric Strip)
-   ========================================================================== */
+/* Glance capsule metric strip */
 .header-center {
   display: flex;
   align-items: center;
@@ -421,9 +414,7 @@ button,
   box-shadow: 0 4px 16px rgba(56, 189, 248, 0.4);
 }
 
-/* ==========================================================================
-   Main Workspace (Full-Bleed Map + Sliding Side Dock)
-   ========================================================================== */
+/* Main workspace layout */
 #main-content {
   flex: 1;
   display: flex;
@@ -720,9 +711,7 @@ button,
   transform: scale(1.1);
 }
 
-/* ==========================================================================
-   Sliding Glass Side Dock (Apple Material Drawer)
-   ========================================================================== */
+/* Side dock drawer */
 .side-dock {
   width: var(--dock-width);
   min-width: var(--dock-width);
@@ -886,9 +875,7 @@ button,
   border-color: var(--border-highlight);
 }
 
-/* ==========================================================================
-   Tab 1: Polished Badi Agent Console (Minimalist, Apple-Grade)
-   ========================================================================== */
+/* Tab 1: Agent console */
 #tab-agent {
   padding: 0.95rem;
   flex-direction: column;
@@ -1580,9 +1567,7 @@ button,
   transform: scale(1.05);
 }
 
-/* ==========================================================================
-   Tab 2: Mission Queue Styling
-   ========================================================================== */
+/* Tab 2: Mission queue */
 .scrollable-container {
   flex: 1;
   min-height: 0;
@@ -1842,9 +1827,7 @@ button,
   background: #0369a1;
 }
 
-/* ==========================================================================
-   Tab 3: Evidence & Cypher Inspector
-   ========================================================================== */
+/* Tab 3: Evidence and inspector */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -2106,9 +2089,7 @@ button,
   white-space: pre-wrap;
 }
 
-/* ==========================================================================
-   Tab 4: Memory Timeline
-   ========================================================================== */
+/* Memory timeline */
 .memory-timeline {
   display: flex;
   flex-direction: column;
@@ -2189,9 +2170,7 @@ button,
   font-size: 0.8rem;
 }
 
-/* ==========================================================================
-   Map Nodes, Settlements & Bridge Markers Styling
-   ========================================================================== */
+/* Map node and marker styles */
 .maplibregl-canvas-container {
   position: absolute !important;
   top: 0 !important;
@@ -2423,9 +2402,7 @@ button,
   box-shadow: 0 4px 16px rgba(239, 68, 68, 0.45);
 }
 
-/* ==========================================================================
-   Zero-State Onboarding & Graph Initialization Console
-   ========================================================================== */
+/* Zero-state onboarding and graph initialization */
 .zero-state-overlay {
   position: absolute;
   inset: 0;

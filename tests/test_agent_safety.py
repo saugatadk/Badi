@@ -1,21 +1,15 @@
-import pytest
 from backend.agent import (
-    execute_agent_query,
-    trace_settlement_access,
+    FALKORDB_DOMAIN_TOOLS,
     analyze_road_impact,
+    execute_agent_query,
     record_road_observation,
-    _deterministic_agent_router,
-    FALKORDB_DOMAIN_TOOLS
+    trace_settlement_access,
 )
-from backend.queries import get_bridge_damage_summary
+from backend.queries import extract_corridor_endpoints, get_bridge_damage_summary
+
 
 def test_unresolved_road_never_substitutes_dhunche(monkeypatch):
-    """
-    P0 Safety Rule:
-    When an unknown or unmapped road is inquired about (e.g. 'between village X and Y'),
-    the agent must NEVER silently substitute Syabrubesi–Dhunche.
-    It must report the entity as unresolved and present valid options.
-    """
+    """Ensures unknown or unmapped roads report as unresolved without silent substitution."""
     monkeypatch.setattr("backend.agent.GEMINI_API_KEY", "")
     response = execute_agent_query("What happens if the road between Narnia and Atlantis is blocked?")
     assert "road_syabru_dhunche" not in response.answer.lower() or "could not" in response.answer.lower()
@@ -28,12 +22,9 @@ def test_unresolved_road_never_substitutes_dhunche(monkeypatch):
     assert "could not be identified" in result["message"]
     assert "candidates" in result
 
+
 def test_unresolved_settlement_never_substitutes_syabrubesi(monkeypatch):
-    """
-    P0 Safety Rule:
-    When an unknown settlement is inquired about, the agent must NEVER silently substitute Syabrubesi.
-    It must explicitly report the settlement as unresolved.
-    """
+    """Ensures unknown settlements report as unresolved without silent substitution."""
     monkeypatch.setattr("backend.agent.GEMINI_API_KEY", "")
     response = execute_agent_query("Trace hospital access for Wonderland settlement")
     assert "loc_syabrubesi" not in response.answer.lower() or "could not" in response.answer.lower()
@@ -44,97 +35,74 @@ def test_unresolved_settlement_never_substitutes_syabrubesi(monkeypatch):
     assert result["status"] == "unresolved"
     assert "could not be identified" in result["message"]
 
+
 def test_observation_recording_refuses_unresolved_road():
-    """
-    P0 Data Integrity Rule:
-    The agent must refuse to record observations on unresolved roads,
-    making zero database mutations.
-    """
+    """Ensures observations on unrecognized roads are rejected without database mutations."""
     result = record_road_observation(
         road_name_or_id="phantom_corridor_highway",
         reported_status="blocked",
-        note="Spotted flood waters"
+        note="Spotted flood waters",
     )
     assert result["status"] == "unresolved"
     assert "no database changes were made" in result["message"].lower()
 
+
 def test_casual_report_cannot_promote_to_verified_passable():
-    """
-    P0 Epistemic Verification Rule:
-    A casual operator or community report claiming a road is passable
-    cannot single-handedly promote a road to 'verified_passable' without physical scout survey.
-    """
+    """Ensures casual reports cannot promote road status to verified_passable without ground verification."""
     result = record_road_observation(
         road_name_or_id="road_briddhim_syabru",
         reported_status="verified_passable",
         note="Someone in chat said the road might be open",
         source="community_report",
-        scout_verified=False
+        scout_verified=False,
     )
     assert result["status"] == "ok"
     assert result["recorded_status"] != "verified_passable"
     assert result["recorded_status"] == "unknown"
     assert "Epistemic Safety Constraint" in result["warning"]
 
+
 def test_arbitrary_cypher_tool_is_not_exposed_to_agent():
-    """
-    P0 Graph Security Rule:
-    Arbitrary Cypher execution tools (e.g. execute_cypher_read_query) must NOT
-    be exposed to the agent/LLM. Only parameterized domain tools are permitted.
-    """
+    """Ensures arbitrary raw Cypher tools are not exposed in the agent tool registry."""
     tool_names = [t["function"]["name"] for t in FALKORDB_DOMAIN_TOOLS]
     assert "execute_cypher_read_query" not in tool_names
     assert "get_bridge_damage_summary" in tool_names
     assert "analyze_road_impact" in tool_names
     assert "get_settlement_condition" in tool_names
 
+
 def test_bridge_damage_summary_returns_live_structure():
-    """
-    P0 Factual Correctness Rule:
-    Bridge summary must be derived from FalkorDB query results,
-    never relying on hardcoded defaults (39 washed, 4 damaged, 15 intact).
-    """
+    """Ensures bridge damage summary reflects live FalkorDB query result structure."""
     summary = get_bridge_damage_summary()
     assert summary["status"] in ["ok", "unavailable"]
     if summary["status"] == "ok":
         assert isinstance(summary["counts"], dict)
         assert summary["total"] == sum(summary["counts"].values())
 
+
 def test_population_query_clarifies_households_vs_individuals(monkeypatch):
-    """
-    P1 Grounded Communication Rule:
-    When asked about population, the agent must clarify that the graph
-    stores surveyed household units rather than individual census counts.
-    """
+    """Ensures population answers clarify that data represents surveyed household counts."""
     monkeypatch.setattr("backend.agent.GEMINI_API_KEY", "")
     response = execute_agent_query("What is the population of settlements in Rasuwa district?")
     assert "household" in response.answer.lower()
 
+
 def test_route_between_betrawati_and_syabrubesi():
-    """
-    P0 Point-to-Point Transit Rule:
-    The agent must calculate topological paths between two settlements,
-    identifying verified passable routes, potential routes with active missions,
-    and severed corridors without raw database IDs in user text.
-    """
+    """Calculates multi-hop corridor between settlements with friendly names and active missions."""
     response = execute_agent_query("can i reach syabrubesi from betrawati")
     assert response.tool_called == "find_route_between"
     assert "Transit Corridor: Betrawati to Syabrubesi" in response.answer
-    assert "road_kispang_betrawati" not in response.answer  # No raw road ID in user text
-    assert "road_syabru_dhunche" not in response.answer     # No raw road ID in user text
+    assert "road_kispang_betrawati" not in response.answer
+    assert "road_syabru_dhunche" not in response.answer
     assert "Kispang–Betrawati Steel Bridge" in response.answer
     assert "Active Recon Mission" in response.answer
     assert "primary_route" in response.supporting_evidence
     assert response.supporting_evidence["origin_id"] == "loc_betrawati"
     assert response.supporting_evidence["destination_id"] == "loc_syabrubesi"
 
-def test_extract_corridor_endpoints_directionality():
-    """
-    P1 Directionality Rule:
-    Extracts origin and destination accurately according to grammatical prepositions.
-    """
-    from backend.queries import extract_corridor_endpoints
 
+def test_extract_corridor_endpoints_directionality():
+    """Extracts origin and destination endpoints accurately from preposition phrasing."""
     orig1, dest1 = extract_corridor_endpoints("can i reach syabrubesi from betrawati")
     assert orig1[0] == "loc_betrawati"
     assert dest1[0] == "loc_syabrubesi"
@@ -147,12 +115,9 @@ def test_extract_corridor_endpoints_directionality():
     assert orig3[0] == "loc_gatlang"
     assert dest3[0] == "loc_kispang"
 
+
 def test_out_of_scope_query_scope_enforcement():
-    """
-    P0 Domain Boundary Rule:
-    Irrelevant questions outside the flood disaster corridor (e.g. general festivals, trivia)
-    must not execute graph Cypher traversals and must return dedicated out-of-scope metadata.
-    """
+    """Refuses out-of-scope domain queries without executing graph traversals."""
     response = execute_agent_query("what is dashain?")
     assert response.agent_role == "ScopeEnforcer"
     assert response.tool_called == "none_out_of_scope"
@@ -160,12 +125,9 @@ def test_out_of_scope_query_scope_enforcement():
     assert response.supporting_evidence.get("status") == "out_of_scope"
     assert "dashain is a" not in response.answer.lower()
 
+
 def test_observation_update_action_from_corridor_phrase():
-    """
-    P0 Action Execution Rule:
-    When an operator provides a field report requesting an update (even with endpoint phrasing),
-    the agent must take action via record_road_observation rather than read-only path routing.
-    """
+    """Routes update observations with corridor phrasing to record_road_observation action."""
     prompt = "helicopter view found the path from syabrubesi bazaar to briddhim village passable. can you update this to reflect the change"
     response = execute_agent_query(prompt)
     assert response.agent_role == "Field Coordinator"
@@ -174,6 +136,3 @@ def test_observation_update_action_from_corridor_phrase():
     assert response.supporting_evidence.get("road_id") == "road_briddhim_syabru"
     assert "road_briddhim_syabru" in response.cypher_executed
     assert "Epistemic Safety Rule" in response.answer or "Epistemic" in response.supporting_evidence.get("warning", "")
-
-
-

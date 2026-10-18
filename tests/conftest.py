@@ -1,24 +1,23 @@
+import json
 import sys
 from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# Add project root to path
+import pytest
+
+# Ensure project root is available on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-import json
-import uuid
-from typing import Dict, Any, List, Optional
-import pytest
-from fastapi.testclient import TestClient
+from falkordb.edge import Edge  # noqa: E402
+from falkordb.node import Node  # noqa: E402
+from falkordb.path import Path as FalkorPath  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
-from falkordb.node import Node
-from falkordb.edge import Edge
-from falkordb.path import Path as FalkorPath
-
-from backend.main import app
-from backend.config import FALKORDB_GRAPH
-import backend.graph as graph_module
+import backend.graph as graph_module  # noqa: E402
+from backend.config import FALKORDB_GRAPH  # noqa: E402
+from backend.main import app  # noqa: E402
 
 DATA_FILE = Path(__file__).resolve().parent.parent / "data" / "trishuli_flood_network.json"
 
@@ -166,7 +165,7 @@ class InMemoryFalkorGraph:
 
         # Fetch settlements
         if "MATCH (s:Location {type: 'settlement'}) RETURN s.id AS id" in q:
-            settlements = [l for l in self.locations.values() if l["type"] == "settlement"]
+            settlements = [loc for loc in self.locations.values() if loc["type"] == "settlement"]
             return MockQueryResult([[s["id"], s["name"], s["households"]] for s in settlements])
 
         # Candidate roads

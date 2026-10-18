@@ -1,174 +1,149 @@
 # Badi (बाढी) — Flood Response Route Intelligence
 
-> WeMakeDevs × FalkorDB "Graph Hacks: Context for AI Agents" Hackathon
+> Autonomous flood triage agent for Nepal mountain roads, powered by FalkorDB.
 >
-> Target Tracks:
-> - Track 01: Agents That Act on Connected Data
-> - Track 02: Agent Memory and Coordination
+> Built for the **WeMakeDevs × FalkorDB "Graph Hacks: Context for AI Agents" Hackathon**.
+>
+> - **Track 01**: Agents That Act on Connected Data
+> - **Track 02**: Agent Memory and Coordination
 
 ---
 
-## Overview
+## The Problem and The Solution
 
-In post-monsoon and glacial outburst floods across Nepal’s steep river valleys, mountain roads wash out within hours. Landslides cut off road links, bridges collapse, and entire villages lose access to emergency healthcare.
+### The Problem
 
-Disaster triage in this terrain is a graph connectivity problem for three reasons:
+During post-monsoon floods in countries like Nepal, mountain roads wash out quickly. Landslides destroy bridges and cut off entire villages from district hospitals.
 
-1. **Multi-hop path safety**: An unobserved road cannot be assumed safe. A route to a hospital has verified access only if every edge along the path has been physically confirmed passable.
-2. **Topological cut-edge bottlenecks**: When a main road collapses, determining which unverified roads are the sole remaining lifelines for isolated settlements requires live multi-hop path traversals over connected graph topology.
-3. **Episodic graph memory**: As scouts and coordinators inspect roads, log conflicting observations, or simulate landslides, these actions must persist as `(:EpisodicMemory)` nodes in FalkorDB so that autonomous agents track operations across sessions.
+Relief teams face three critical challenges:
 
-Badi runs flood reconnaissance directly on live FalkorDB graph topology. Every metric, road status, hospital route, mission rank, and memory record in the console comes from Cypher queries executed against the database.
+1. **You cannot assume an unobserved road is safe.** A path to a hospital is safe only when scouts physically verify every segment.
+2. **Standard databases cannot easily find isolated villages.** When a main road fails, SQL tables cannot quickly calculate which villages lost their only lifeline.
+3. **Decisions need cross-session memory.** Field scout reports, road closures, and mission choices must be saved so AI agents coordinate without losing context.
+
+### The Solution: Why FalkorDB?
+
+FalkorDB stores roads, bridges, settlements, and hospitals as a connected graph.
+
+Badi uses live Cypher queries to:
+
+- Trace multi-hop paths where every road segment is confirmed safe (`verified_passable`).
+- Identify single road links where a failure leaves downstream villages with zero alternate routes.
+- Re-rank scout inspection missions immediately after a landslide occurs.
+- Persist field observations and triage choices as `(:EpisodicMemory)` nodes in FalkorDB.
 
 ---
 
-## Hackathon Brief Requirements
+## Key Features
 
-| Brief requirement | How Badi implements it in FalkorDB | Live verification |
-| :--- | :--- | :--- |
-| **1. Follow connections across data** | Traverses multi-hop paths up to 7 hops across `(:Location)-[:ROAD_TO]->(:Location)`, surveyed bridge damage points `(:RoadSegment)-[:INCLUDES_BRIDGE]->(:Bridge)`, and health facilities `(:Facility)-[:AT_LOCATION]->(:Location)`. Identifies cut-edges where a single segment failure isolates downstream populations. | Preset: _Trace Syabrubesi Access_ and _Blast Radius_ |
-| **2. Remember across sessions** | Writes queries, scout reports, landslide events, and triage choices to `(:EpisodicMemory)` nodes in FalkorDB with `session_id`, `agent_role`, `timestamp`, and `[:AFFECTED_ROAD]` relationships. | Preset: _Recall Graph Memories_ and Timeline tab |
-| **3. Share state between agents** | Coordinates two agents: `Route Analyst` and `Field Coordinator`. When `Field Coordinator` updates road consensus or a landslide occurs, it mutates FalkorDB. `Route Analyst` queries the updated graph to recalculate hospital routes and re-rank the mission queue without cross-agent polling. | Dynamic re-ranking and _Landslide_ simulation button |
-| **4. Connect people, projects, and decisions** | Connects people (`:Source` nodes: field scouts, emergency dispatchers) to decisions (`:Observation` consensus and `:EpisodicMemory` records) to projects (`:Mission` nodes) and physical network assets (`:RoadSegment` and `:Location`). | Preset: _Connect People, Projects & Decisions_ |
-| **5. Show the path behind an answer** | Every agent response returns the exact multi-hop path followed, the live Cypher query executed against FalkorDB, supporting graph evidence, and the episodic memory node ID. | Chat UI: _Show Graph Path & Cypher Behind Answer_ drawer |
+- **Safe Path Search**: Finds hospital routes where every road segment is physically confirmed safe.
+- **Isolated Village Detection**: Calculates which settlements lose all hospital access if a road or bridge fails.
+- **Dynamic Mission Ranking**: Prioritizes road inspections based on how many people depend on that road.
+- **Agent Memory**: Saves field reports and agent actions as memory nodes inside FalkorDB across sessions.
+- **Dual Agent Modes**: Runs with Google Gemini (`gemini-3.1-flash-lite`) online, or runs fully offline with a built-in deterministic router.
+- **FastMCP Server**: Exposes 9 graph tools and emergency protocols to external agents via Model Context Protocol.
+- **Safety Guardrails**: Refuses casualty estimation and airlift dispatch. Badi only reports verified road network data.
 
 ---
 
-## FalkorDB Graph Schema
+## Graph Schema
 
 ```mermaid
-graph TD
-    classDef loc fill:#1e293b,stroke:#0ea5e9,stroke-width:2px,color:#fff;
-    classDef fac fill:#1e293b,stroke:#ef4444,stroke-width:2px,color:#fff;
-    classDef road fill:#1e293b,stroke:#10b981,stroke-width:2px,color:#fff;
-    classDef obs fill:#1e293b,stroke:#f59e0b,stroke-width:2px,color:#fff;
-    classDef src fill:#1e293b,stroke:#6366f1,stroke-width:2px,color:#fff;
-    classDef msn fill:#1e293b,stroke:#ec4899,stroke-width:2px,color:#fff;
-    classDef mem fill:#1e293b,stroke:#8b5cf6,stroke-width:2px,color:#fff;
-
-    LocA[Location: Settlement / Hub]:::loc -->|ROAD_TO: status, km, bridge| LocB[Location: Settlement / Hub]:::loc
-    Fac[Facility: Hospital / Health Post]:::fac -->|AT_LOCATION| LocB
-    RoadSeg[RoadSegment: ID, Status, Bridge]:::road -->|CONNECTS| LocA
-    RoadSeg -->|CONNECTS| LocB
-    RoadSeg -->|HAS_OBSERVATION| Obs[Observation: Reported Status, Note]:::obs
-    Obs -->|FROM_SOURCE| Src[Source: NDRRMA / Scout / HOTOSM]:::src
-    Msn[Mission: Priority Score, Reason]:::msn -->|INVESTIGATES| RoadSeg
-    Mem[EpisodicMemory: Role, Event, Summary]:::mem -->|AFFECTED_ROAD| RoadSeg
+graph LR
+    Loc[Location] -->|ROAD_TO| Loc
+    Fac[Facility] -->|AT_LOCATION| Loc
+    Road[RoadSegment] -->|CONNECTS| Loc
+    Road -->|INCLUDES_BRIDGE| Brg[Bridge]
+    Road -->|HAS_OBSERVATION| Obs[Observation]
+    Obs -->|FROM_SOURCE| Src[Source]
+    Msn[Mission] -->|INVESTIGATES| Road
+    Mem[EpisodicMemory] -->|AFFECTED_ROAD| Road
 ```
 
-### Schema Nodes and Relationships
+### Graph Nodes
 
-- `(:Location {id, name, type, district, lat, lon, households})`: Settlements, road junctions, and regional hubs.
-- `(:Facility {id, name, location_id, type, importance_weight})`: District hospitals and health posts.
-- `(:RoadSegment {id, name, u, v, length_km, is_bridge, status})`: Physical bidirectional roadway corridors.
-- `(:Observation {id, road_id, status, note, timestamp, is_simulated})`: Ground reports from scouts and emergency bulletins.
-- `(:Source {id, name, url, license})`: Data authorities (NDRRMA, HOTOSM, Scout Recon Unit).
-- `(:Mission {id, road_id, priority_score, reason, sole_lifeline_count, total_dependent_count, status, timestamp})`: Dynamically prioritized reconnaissance targets.
-- `(:EpisodicMemory {id, session_id, agent_role, event_type, summary, road_id, timestamp})`: Persistent coordination memory events.
+| Node Label | Description |
+| :--- | :--- |
+| `:Location` | Settlements, road junctions, and regional hubs in Rasuwa District. |
+| `:Facility` | District hospitals, clinics, and health posts. |
+| `:RoadSegment` | Road lifelines (`verified_passable`, `unknown`, `blocked`, `disputed`). |
+| `:Bridge` | River crossings with surveyed damage assessments. |
+| `:Observation` | Field reports filed by scouts or disaster agencies. |
+| `:Source` | Data authorities (NDRRMA, HOTOSM, Scout Recon Unit). |
+| `:Mission` | Prioritized road inspection assignments. |
+| `:EpisodicMemory` | Coordination events and triage decisions saved across sessions. |
 
 ---
 
-## Epistemic Safety Rules and Consensus
+## Setup Guide (Full Walkthrough)
 
-Badi enforces three epistemic rules for ground reconnaissance:
+Follow these steps to install and run Badi on your computer.
 
-1. **Default-to-unknown**: Unobserved roads never default to `verified_passable`. They initialize as `unknown`.
-2. **Settlement access states**:
-   - `VERIFIED_ACCESS`: At least one path where all edges are `verified_passable`.
-   - `NEEDS_RECON`: Zero verified paths, but at least one potential path with `unknown` or `disputed` edges and zero `blocked` edges.
-   - `ISOLATED_ON_MAP`: Zero verified paths and zero potential paths. All topological routes are cut by confirmed `blocked` segments.
-3. **Consensus and dispute resolution**:
-   - Only `blocked` observations produce `blocked`.
-   - Only `verified_passable` observations produce `verified_passable`.
-   - Conflicting reports produce `disputed` and trigger an immediate high-priority recon mission.
-   - Ground scout reports (`src_scout`) with `override=True` resolve disputes.
+### Prerequisites
+
+- **Docker** and **Docker Compose** installed and running.
+- **Python 3.10+** (Python 3.12 recommended).
+- **Git** installed.
+
+### Quick Start
+
+Run this command block in your terminal:
+
+```bash
+# 1. Clone the repository and navigate into the directory
+git clone https://github.com/saugatadk/Badi.git
+cd Badi
+
+# 2. Start FalkorDB in Docker
+docker compose up -d
+
+# 3. Create and activate a Python virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 4. Install Python dependencies
+pip install -r requirements.txt
+
+# 5. Seed FalkorDB with the Trishuli flood network
+python -m scripts.seed_falkordb
+
+# 6. Start the web server and user interface
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Open `http://localhost:8000` in your web browser.  
+Open `http://localhost:3000` to view the FalkorDB database browser.
 
 ---
 
-## Core Cypher Queries
+### Step-by-Step Instructions
 
-### 1. Verified Path to Healthcare Facilities
+#### 1. Clone the Repository
 
-Finds loop-free paths up to 7 hops where every edge is confirmed passable:
+Clone the project from GitHub and move into the project folder:
 
-```cypher
-MATCH p = (s:Location {id: $settlement_id})-[:ROAD_TO*1..7]->(hub:Location)<-[:AT_LOCATION]-(f:Facility)
-WHERE ALL(rel IN relationships(p) WHERE rel.status = 'verified_passable')
-  AND ALL(n IN nodes(p) WHERE 1 = size([m IN nodes(p) WHERE m = n]))
-RETURN p, f.id AS facility_id, f.name AS facility_name, f.importance_weight AS facility_weight
-ORDER BY length(p) ASC
+```bash
+git clone https://github.com/saugatadk/Badi.git
+cd Badi
 ```
 
-### 2. Potential Reconnaissance Paths
+#### 2. Start the Database
 
-Finds unverified paths containing `unknown` or `disputed` edges without any confirmed `blocked` segments:
-
-```cypher
-MATCH p = (s:Location {id: $settlement_id})-[:ROAD_TO*1..7]->(hub:Location)<-[:AT_LOCATION]-(f:Facility)
-WHERE NONE(rel IN relationships(p) WHERE rel.status = 'blocked')
-  AND ANY(rel IN relationships(p) WHERE rel.status IN ['unknown', 'disputed'])
-  AND ALL(n IN nodes(p) WHERE 1 = size([m IN nodes(p) WHERE m = n]))
-RETURN p, f.id AS facility_id, f.name AS facility_name, f.importance_weight AS facility_weight
-ORDER BY length(p) ASC
-```
-
-### 3. Downstream Topological Blast Radius
-
-Finds all settlements that lose facility access if a given road segment fails:
-
-```cypher
-MATCH p = (s:Location {type: 'settlement'})-[:ROAD_TO*1..7]->(hub:Location)<-[:AT_LOCATION]-(f:Facility)
-WHERE NONE(rel IN relationships(p) WHERE rel.status = 'blocked')
-  AND ANY(rel IN relationships(p) WHERE rel.road_id = $road_id)
-  AND ALL(n IN nodes(p) WHERE 1 = size([m IN nodes(p) WHERE m = n]))
-RETURN DISTINCT s.id AS id, s.name AS name, s.households AS households, s.district AS district
-```
-
-### 4. Atomic Edge Synchronization
-
-Updates the `RoadSegment` node and its bidirectional `[:ROAD_TO]` edges in a single transaction:
-
-```cypher
-MATCH (r:RoadSegment {id: $road_id})
-SET r.status = $new_status
-WITH r
-OPTIONAL MATCH ()-[rel:ROAD_TO {road_id: $road_id}]->()
-SET rel.status = $new_status
-RETURN r.id AS road_id, r.status AS status
-```
-
----
-
-## Multi-Agent Architecture
-
-Badi coordinates two specialized agents backed by FalkorDB tools:
-
-- `Route Analyst`: Multi-hop path tracing, cut-edge bottleneck identification, and blast radius calculations.
-- `Field Coordinator`: Mission queue ranking, scout dispatching, and dispute resolution.
-
-### Offline Router and LLM Tool Calling
-
-With a `GEMINI_API_KEY`, queries route through `gemini-3.1-flash-lite` with direct tool declarations. Without an API key, Badi falls back to a deterministic regex and keyword router that calls the same FalkorDB functions, so the system works fully offline.
-
-### Hard Boundary Guardrails
-
-When asked about casualties, deaths, or helicopter airlifts, Badi refuses the prompt with a boundary restriction:
-
-> Boundary restriction: Badi evaluates mapped topological connectivity and recorded observations inside FalkorDB. It cannot verify physical terrain safety, casualties, or unmapped hazards.
-
----
-
-## Quickstart Guide
-
-### 1. Start FalkorDB
+Start FalkorDB in a Docker container:
 
 ```bash
 docker compose up -d
 ```
 
-FalkorDB runs on `localhost:6379`. The FalkorDB browser UI is available at `localhost:3000`.
+Verify the container is running:
 
-### 2. Install Dependencies
+```bash
+docker ps --filter name=badi-falkordb
+```
+
+#### 3. Set Up the Python Environment
+
+Create a virtual environment and install the required packages:
 
 ```bash
 python3 -m venv .venv
@@ -176,57 +151,204 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Seed the Graph
+#### 4. Configure Environment Variables (Optional)
+
+Copy the example environment file:
+
+```bash
+cp .env.example .env
+```
+
+Default configuration:
+
+```ini
+FALKORDB_HOST=localhost
+FALKORDB_PORT=6379
+FALKORDB_GRAPH=badi_trishuli_graph
+GEMINI_API_KEY=
+GEMINI_MODEL=gemini-3.1-flash-lite
+```
+
+> [!NOTE]
+> `GEMINI_API_KEY` is optional. If left blank, Badi runs offline using its built-in deterministic router.
+
+#### 5. Load the Road Network Data
+
+Load the Rasuwa / Trishuli flood graph into FalkorDB:
 
 ```bash
 python -m scripts.seed_falkordb
 ```
 
-### 4. Launch the Application
+#### 6. Start the Application Server
+
+Run the FastAPI application with Uvicorn:
 
 ```bash
 uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Open `http://localhost:8000` to view the console.
+---
 
-### 5. Run the Tests
+## How to Run and Use Badi
+
+### 1. Web Console
+
+Open `http://localhost:8000` in your web browser:
+
+- **Interactive Map**: View live road status, damaged bridges, and settlements.
+- **Landslide Simulation**: Click **Simulate Landslide** to see missions re-rank dynamically.
+- **Agent Chat**: Ask questions about routes and isolated communities.
+- **Cypher Drawer**: Click **Show Graph Path & Cypher Behind Answer** to inspect live queries.
+
+### 2. Terminal Agent CLI
+
+Run the interactive terminal console:
+
+```bash
+python agent_cli.py
+```
+
+Try these questions:
+
+- `Trace hospital access for Syabrubesi`
+- `What is the blast radius if Syabrubesi–Dhunche Hwy is blocked?`
+- `Connect people, projects, and decisions for Syabrubesi–Dhunche`
+- `Recall recent episodic memory events`
+- `How many casualties occurred in Rasuwa?` *(Refused by safety guardrail)*
+
+### 3. Model Context Protocol (MCP) Server
+
+Badi includes an MCP server (`backend/mcp_server.py`) with 9 graph tools for external AI agents:
+
+```bash
+python backend/mcp_server.py
+```
+
+Available tools include:
+
+- `get_settlement_safety_status`: Check verified hospital access for a village.
+- `find_evacuation_or_supply_route`: Find safe routes between two settlements.
+- `analyze_road_impact`: Calculate isolated settlements if a road fails.
+- `record_field_observation`: Save new road reports and update graph edges.
+- `get_active_recon_missions`: List prioritized inspection targets.
+- `get_bridge_damage_assessments`: Check surveyed bridge damage reports.
+- `get_episodic_coordination_timeline`: Read cross-session agent memory.
+
+---
+
+## Verification and Tests
+
+### Run Automated Tests (34 Tests)
+
+Run pytest to verify the full system:
 
 ```bash
 pytest -v
 ```
 
----
+All 34 tests pass. The tests verify:
 
-## Automated Test Suite
+- **Path Search**: Cypher queries find verified and potential hospital paths.
+- **Blast Radius**: Cypher queries detect isolated settlements when roads fail.
+- **Safety Rules**: Unobserved roads initialize as `unknown` and never default to safe.
+- **Dispute Resolution**: Conflicting reports mark roads as `disputed` until scouts verify them.
+- **Guardrails**: System refuses casualty estimation and helicopter flight dispatch.
+- **Centrality**: Landslides trigger dynamic mission re-ranking.
+- **Memory**: Actions and observations persist in FalkorDB with custom session IDs.
 
-The test suite validates graph queries, consensus logic, and dynamic re-ranking:
+### The FalkorDB Requirement Test
 
-```text
-tests/test_cypher_queries.py::test_find_verified_paths_cypher PASSED
-tests/test_cypher_queries.py::test_find_potential_paths_cypher PASSED
-tests/test_cypher_queries.py::test_find_affected_settlements PASSED
-tests/test_cypher_queries.py::test_get_road_evidence_chain PASSED
-tests/test_cypher_queries.py::test_falkordb_removal_raises_503 PASSED
-tests/test_epistemic_rules.py::test_unobserved_roads_never_verified_passable PASSED
-tests/test_epistemic_rules.py::test_conflicting_observations_mark_road_as_disputed PASSED
-tests/test_epistemic_rules.py::test_scout_override_resolves_dispute PASSED
-tests/test_epistemic_rules.py::test_hard_guardrail_boundary_refusal PASSED
-tests/test_falkordb_centrality.py::test_centrality_and_landslide_reranking PASSED
+FalkorDB is the sole database in Badi. There are no SQLite or in-memory fallbacks.
+
+If FalkorDB stops, all protected endpoints immediately return `HTTP 503 Service Unavailable`:
+
+```bash
+# 1. Stop FalkorDB container
+docker stop badi-falkordb
+
+# 2. Test health endpoint (returns 503)
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/api/health
+# Output: 503
+
+# 3. Restart FalkorDB container
+docker start badi-falkordb
+
+# 4. Verify healthy connection
+curl -s http://localhost:8000/api/health
+# Output: {"status":"healthy","falkordb":"connected","graph":"badi_trishuli_graph","mode":"live_falkordb"}
 ```
 
 ---
 
-## FalkorDB Removal Test
+## Safety Rules and Operational Guardrails
 
-FalkorDB is the sole database for Badi. There are no in-memory dictionary fallbacks or SQLite databases in the backend.
+### Epistemic Safety Rules
 
-- If FalkorDB stops or becomes unreachable on `localhost:6379`, all API endpoints return `HTTP 503 Service Unavailable`.
-- Automated test `tests/test_cypher_queries.py::test_falkordb_removal_raises_503` verifies this behavior.
+1. **Default-to-Unknown**: Unobserved roads start with status `unknown`. They are never assumed safe.
+2. **Access States**:
+   - `VERIFIED_ACCESS`: Every road segment to a hospital is confirmed safe (`verified_passable`).
+   - `NEEDS_RECON`: At least one path exists with unverified roads and zero confirmed blockages.
+   - `ISOLATED_ON_MAP`: All known paths are cut by confirmed blockages.
+3. **Consensus**: Conflicting reports mark a road as `disputed`. A scout report with `override=True` resolves the dispute.
+
+### Hard Operational Guardrails
+
+- **No Casualty Estimation**: Badi refuses questions about casualties, injuries, or deaths.
+- **No Airlift Dispatch**: Badi refuses helicopter flight routing. It evaluates ground road networks only.
+- **No Unverifiable Safety Claims**: Badi never claims terrain is 100% safe. It reports mapped graph data only.
 
 ---
 
-## Project Disclosure
+## Project Structure
 
-- **AI assistants used**: Antigravity (powered by Gemini Flash) was used as a pair programming assistant for schema drafting, Cypher query optimization, and test automation.
-- **Original work**: The Bhote Koshi-Trishuli flood topological dataset, the epistemic safety state machine, the cut-edge bottleneck formulation, and the FalkorDB-grounded multi-agent orchestration were engineered specifically for this hackathon submission.
+```text
+Badi/
+├── agent_cli.py              # Interactive terminal agent console
+├── docker-compose.yml        # FalkorDB service definition
+├── requirements.txt          # Python dependencies
+├── backend/
+│   ├── main.py               # FastAPI application and REST endpoints
+│   ├── agent.py              # Multi-agent router (Gemini + offline fallback)
+│   ├── graph.py              # FalkorDB connection and graph driver
+│   ├── queries.py            # Cypher queries for paths, blast radius, and memory
+│   ├── missions.py           # Cut-edge centrality and mission priority ranking
+│   ├── models.py             # Pydantic data schemas
+│   ├── ingest.py             # Topology import and normalization
+│   └── mcp_server.py         # FastMCP server with 9 domain tools
+├── data/
+│   └── trishuli_flood_dataset.json # Rasuwa District flood corridor network
+├── frontend/
+│   ├── index.html            # Main dashboard HTML
+│   ├── styles.css            # Responsive interface styling
+│   └── app.js                # MapLibre GL map and UI event wiring
+├── scripts/
+│   └── seed_falkordb.py      # Database seeding script
+└── tests/                    # 34 automated pytest tests
+```
+
+---
+
+## Technology Stack
+
+| Component | Technology | Description |
+| :--- | :--- | :--- |
+| **Graph Database** | **FalkorDB** | Primary database for road topology and episodic memory. |
+| **Backend** | **FastAPI** + **Uvicorn** | High-performance Python async web framework. |
+| **Graph Driver** | **falkordb** | Official Python client library for FalkorDB. |
+| **Agent Protocols** | **FastMCP** + **Google GenAI SDK** | Model Context Protocol server and Gemini function calling. |
+| **Frontend Map** | **MapLibre GL JS** + **PMTiles** | Interactive vector tile map rendering. |
+| **Frontend UI** | **Vanilla JS** + **CSS** | Lightweight dashboard without heavy frontend frameworks. |
+| **Automated Testing** | **pytest** + **httpx** | Comprehensive test suite (34 tests). |
+| **Containers** | **Docker** & **Docker Compose** | Containerized FalkorDB deployment. |
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
+
+### Data Attribution
+
+- **Humanitarian OpenStreetMap Team (HOTOSM)**: 2026 Nepal Monsoon Floods activation data, licensed under the Open Database License (ODbL).
+- **National Disaster Risk Reduction and Management Authority (NDRRMA)**: Nepal hazard and infrastructure data, used under Nepal Open Government Data terms.

@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-"""
-Badi (बाढी) - Interactive Agent CLI Console
+"""Badi (बाढी) - Interactive Agent CLI Console.
+
 Direct terminal access to FalkorDB-grounded multi-agent triage engine.
 """
 
 import sys
-import json
 from pathlib import Path
 
-# Add project root to path
+# Ensure project root is available on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from backend.agent import execute_agent_query
-from backend.graph import ping_falkordb
+from backend.agent import execute_agent_query  # noqa: E402
+from backend.graph import ping_falkordb  # noqa: E402
 
 CYAN = "\033[96m"
 GREEN = "\033[92m"
@@ -24,6 +23,8 @@ MAGENTA = "\033[95m"
 BOLD = "\033[1m"
 DIM = "\033[2m"
 RESET = "\033[0m"
+
+CLI_SESSION_ID = "cli_session"
 
 BANNER = f"""
 {CYAN}{BOLD}======================================================================
@@ -43,17 +44,16 @@ Available Agent Roles: Route Analyst & Field Coordinator{RESET}
   {DIM}(Type 'exit' or 'quit' to leave){RESET}
 """
 
+
 def main():
     print(BANNER)
     try:
         ping_falkordb()
         print(f"{GREEN}✓ FalkorDB Connection Verified.{RESET}\n")
-    except Exception as e:
-        print(f"{RED}✕ FalkorDB Connection Failed: {e}{RESET}")
+    except Exception as err:
+        print(f"{RED}✕ FalkorDB Connection Failed: {err}{RESET}")
         print(f"{YELLOW}Make sure FalkorDB is running on localhost:6379.{RESET}\n")
         sys.exit(1)
-
-    session_id = "cli_session"
 
     while True:
         try:
@@ -65,26 +65,27 @@ def main():
                 break
 
             print(f"{DIM}Querying FalkorDB multi-hop topology and memory...{RESET}")
-            res = execute_agent_query(prompt, session_id=session_id)
+            agent_response = execute_agent_query(prompt, session_id=CLI_SESSION_ID)
 
-            print(f"\n{MAGENTA}{BOLD}[Agent Role: {res.agent_role}]{RESET}")
-            print(f"{GREEN}{res.answer}{RESET}\n")
+            print(f"\n{MAGENTA}{BOLD}[Agent Role: {agent_response.agent_role}]{RESET}")
+            print(f"{GREEN}{agent_response.answer}{RESET}\n")
 
-            if res.tool_called:
-                print(f"{DIM}• Tool Called:{RESET} {CYAN}{res.tool_called}{RESET}")
-            if res.memory_id:
-                print(f"{DIM}• Episodic Memory Node Logged:{RESET} {YELLOW}{res.memory_id}{RESET} (Track 02)")
+            if agent_response.tool_called:
+                print(f"{DIM}• Tool Called:{RESET} {CYAN}{agent_response.tool_called}{RESET}")
+            if agent_response.memory_id:
+                print(f"{DIM}• Episodic Memory Node Logged:{RESET} {YELLOW}{agent_response.memory_id}{RESET} (Track 02)")
 
-            if res.cypher_executed:
+            if agent_response.cypher_executed:
                 print(f"\n{DIM}--- Live FalkorDB Cypher Executed ---{RESET}")
-                print(f"{YELLOW}{res.cypher_executed}{RESET}")
+                print(f"{YELLOW}{agent_response.cypher_executed}{RESET}")
                 print(f"{DIM}------------------------------------{RESET}\n")
 
         except (KeyboardInterrupt, EOFError):
             print(f"\n{YELLOW}Session ended. Namaste!{RESET}")
             break
-        except Exception as e:
-            print(f"{RED}Error: {e}{RESET}\n")
+        except Exception as err:
+            print(f"{RED}Error: {err}{RESET}\n")
+
 
 if __name__ == "__main__":
     main()

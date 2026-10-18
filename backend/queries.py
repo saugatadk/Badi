@@ -1,27 +1,34 @@
-import re
 import difflib
-import uuid
 import json
-from pathlib import Path
+import logging
+import re
+import time
+import uuid
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional, Tuple
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
 from backend.graph import get_graph
 from backend.models import (
+    EpisodicMemoryModel,
+    FacilityModel,
+    KPISummary,
+    LocationModel,
+    ObservationModel,
+    PathInfo,
+    RoadSegmentModel,
     RoadStatus,
     SettlementAccessState,
-    PathInfo,
-    LocationModel,
-    FacilityModel,
-    RoadSegmentModel,
-    ObservationModel,
-    EpisodicMemoryModel,
-    KPISummary
 )
+
+logger = logging.getLogger(__name__)
+
 
 def _current_timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()
 
-def _extract_path_info(path, facility_id: str, facility_name: str, facility_weight: float) -> PathInfo:
+
+def _extract_path_info(path: Any, facility_id: str, facility_name: str, facility_weight: float) -> PathInfo:
     """Extracts structured path details from a FalkorDB Cypher path object."""
     nodes = path.nodes() if callable(getattr(path, "nodes", None)) else path.nodes
     edges = path.edges() if callable(getattr(path, "edges", None)) else path.edges
@@ -45,14 +52,12 @@ def _extract_path_info(path, facility_id: str, facility_name: str, facility_weig
         total_km=total_km,
         facility_id=facility_id,
         facility_name=facility_name,
-        unverified_road_ids=unverified_road_ids
+        unverified_road_ids=unverified_road_ids,
     )
 
+
 def find_verified_paths(settlement_id: str) -> Tuple[List[PathInfo], str]:
-    """
-    Finds all paths to any facility where ALL edges are verified_passable.
-    Enforces strict epistemic safety: no unobserved or blocked roads allowed.
-    """
+    """Finds all paths to any facility where all edges are verified passable."""
     cypher = (
         "MATCH p = (s:Location {id: $settlement_id})-[:ROAD_TO*1..7]->(hub:Location) "
         "MATCH (f:Facility)-[:AT_LOCATION]->(hub) "
@@ -62,19 +67,17 @@ def find_verified_paths(settlement_id: str) -> Tuple[List[PathInfo], str]:
         "ORDER BY length(p) ASC"
     )
     graph = get_graph()
-    res = graph.query(cypher, {"settlement_id": settlement_id})
+    query_result = graph.query(cypher, {"settlement_id": settlement_id})
     paths: List[PathInfo] = []
-    if res and res.result_set:
-        for row in res.result_set:
+    if query_result and query_result.result_set:
+        for row in query_result.result_set:
             path_obj, fac_id, fac_name, fac_weight = row[0], str(row[1]), str(row[2]), float(row[3])
             paths.append(_extract_path_info(path_obj, fac_id, fac_name, fac_weight))
     return paths, cypher
 
+
 def find_potential_paths(settlement_id: str) -> Tuple[List[PathInfo], str]:
-    """
-    Finds all paths where NONE of the edges are blocked, but at least ONE edge
-    is unknown or disputed. These represent potential lifelines needing reconnaissance.
-    """
+    """Finds paths where no edges are blocked, but at least one is unknown or disputed."""
     cypher = (
         "MATCH p = (s:Location {id: $settlement_id})-[:ROAD_TO*1..7]->(hub:Location) "
         "MATCH (f:Facility)-[:AT_LOCATION]->(hub) "
@@ -85,33 +88,28 @@ def find_potential_paths(settlement_id: str) -> Tuple[List[PathInfo], str]:
         "ORDER BY length(p) ASC"
     )
     graph = get_graph()
-    res = graph.query(cypher, {"settlement_id": settlement_id})
+    query_result = graph.query(cypher, {"settlement_id": settlement_id})
     paths: List[PathInfo] = []
-    if res and res.result_set:
-        for row in res.result_set:
+    if query_result and query_result.result_set:
+        for row in query_result.result_set:
             path_obj, fac_id, fac_name, fac_weight = row[0], str(row[1]), str(row[2]), float(row[3])
             paths.append(_extract_path_info(path_obj, fac_id, fac_name, fac_weight))
     return paths, cypher
 
-def classify_settlement_access(settlement_id: str) -> Tuple[SettlementAccessState, str, List[PathInfo], List[PathInfo]]:
-    """
-    Classifies settlement access using strict Epistemic Safety Rules:
-    - VERIFIED_ACCESS: at least 1 path where ALL edges are verified_passable
-    - NEEDS_RECON: 0 verified paths, but >= 1 path with unknown/disputed edges and 0 blocked edges
-    - ISOLATED_ON_MAP: 0 verified paths and 0 potential paths (all mapped routes cut by blocked edges)
-    - NO_MAPPED_ROUTE: No mapped road corridors or facility paths connect to this settlement
-    - UNAVAILABLE: Settlement node does not exist in FalkorDB
-    """
+
+def classify_settlement_access(
+    settlement_id: str,
+) -> Tuple[SettlementAccessState, str, List[PathInfo], List[PathInfo]]:
+    """Classifies settlement access into verified, needs-recon, isolated, or unmapped."""
     graph = get_graph()
 
-    # 1. Verify existence of settlement node in FalkorDB
     node_check = graph.query("MATCH (s:Location {id: $id}) RETURN s", {"id": settlement_id})
     if not node_check or not node_check.result_set:
         return "UNAVAILABLE", f"Settlement node '{settlement_id}' was not found in the graph database.", [], []
 
     node = node_check.result_set[0][0]
-    s_props = node.properties if hasattr(node, "properties") else (getattr(node, "_properties", {}) if hasattr(node, "_properties") else {})
-    settlement_name = s_props.get("name", settlement_id) if isinstance(s_props, dict) else settlement_id
+    node_props = node.properties if hasattr(node, "properties") else getattr(node, "_properties", {})
+    settlement_name = node_props.get("name", settlement_id) if isinstance(node_props, dict) else settlement_id
 
     verified_paths, _ = find_verified_paths(settlement_id)
     potential_paths, _ = find_potential_paths(settlement_id)
@@ -123,7 +121,6 @@ def classify_settlement_access(settlement_id: str) -> Tuple[SettlementAccessStat
         reason = f"No verified paths. {len(potential_paths)} potential route(s) require physical reconnaissance"
         return "NEEDS_RECON", reason, verified_paths, potential_paths
     else:
-        # Check if settlement has any road edges or paths to a facility
         edge_check = graph.query("MATCH (s:Location {id: $id})-[:ROAD_TO]-() RETURN count(*) AS edges", {"id": settlement_id})
         has_edges = edge_check and edge_check.result_set and edge_check.result_set[0][0] > 0
         if not has_edges:
@@ -131,7 +128,7 @@ def classify_settlement_access(settlement_id: str) -> Tuple[SettlementAccessStat
 
         any_path = graph.query(
             "MATCH p = (s:Location {id: $id})-[:ROAD_TO*1..7]->(hub:Location)<-[:AT_LOCATION]-(f:Facility) RETURN count(p) LIMIT 1",
-            {"id": settlement_id}
+            {"id": settlement_id},
         )
         if any_path and any_path.result_set and any_path.result_set[0][0] > 0:
             reason = "All topological routes to healthcare facilities are blocked by flood surges or debris"
@@ -140,67 +137,46 @@ def classify_settlement_access(settlement_id: str) -> Tuple[SettlementAccessStat
             reason = f"No mapped routes connect {settlement_name} to any healthcare facility within the 7-hop horizon."
             return "NO_MAPPED_ROUTE", reason, verified_paths, potential_paths
 
+
 def find_affected_settlements(road_id: str) -> Tuple[List[Dict[str, Any]], str]:
-    """
-    Finds all settlements whose non-blocked paths to any facility traverse road_id.
-    """
+    """Finds all settlements whose non-blocked paths to any facility traverse road_id."""
     cypher = (
         "MATCH p = (s:Location {type: 'settlement'})-[:ROAD_TO*1..7]->(hub:Location) "
         "MATCH (f:Facility)-[:AT_LOCATION]->(hub) "
         "WHERE NONE(rel IN relationships(p) WHERE rel.status = 'blocked') "
         "  AND ANY(rel IN relationships(p) WHERE rel.road_id = $road_id) "
         "  AND ALL(n IN nodes(p) WHERE 1 = size([m IN nodes(p) WHERE m = n])) "
-        "RETURN DISTINCT s.id AS id, s.name AS name, s.households AS households, s.district AS district"
+        "RETURN DISTINCT s.id AS settlement_id, s.name AS settlement_name, s.households AS households "
+        "ORDER BY s.households DESC"
     )
     graph = get_graph()
-    res = graph.query(cypher, {"road_id": road_id})
-    affected = []
-    if res and res.result_set:
-        for row in res.result_set:
+    query_result = graph.query(cypher, {"road_id": road_id})
+    affected: List[Dict[str, Any]] = []
+    if query_result and query_result.result_set:
+        for row in query_result.result_set:
             affected.append({
                 "id": str(row[0]),
                 "name": str(row[1]),
-                "households": int(row[2]),
-                "district": str(row[3])
+                "households": int(row[2]) if row[2] is not None else 0,
             })
-    else:
-        # If road_id is currently marked blocked in FalkorDB, evaluate counterfactually
-        # (which settlements lose topological paths through this corridor if blocked)
-        cf_cypher = (
-            "MATCH p = (s:Location {type: 'settlement'})-[:ROAD_TO*1..7]->(hub:Location) "
-            "MATCH (f:Facility)-[:AT_LOCATION]->(hub) "
-            "WHERE NONE(rel IN relationships(p) WHERE rel.status = 'blocked' AND rel.road_id <> $road_id) "
-            "  AND ANY(rel IN relationships(p) WHERE rel.road_id = $road_id) "
-            "  AND ALL(n IN nodes(p) WHERE 1 = size([m IN nodes(p) WHERE m = n])) "
-            "RETURN DISTINCT s.id AS id, s.name AS name, s.households AS households, s.district AS district"
-        )
-        cf_res = graph.query(cf_cypher, {"road_id": road_id})
-        if cf_res and cf_res.result_set:
-            for row in cf_res.result_set:
-                affected.append({
-                    "id": str(row[0]),
-                    "name": str(row[1]),
-                    "households": int(row[2]),
-                    "district": str(row[3])
-                })
     return affected, cypher
 
+
 def get_road_evidence(road_id: str) -> Dict[str, Any]:
-    """
-    Returns full evidence chain: RoadSegment, endpoints, Observations, Sources, and EpisodicMemories.
-    """
+    """Retrieves full evidence chain for a road segment."""
     graph = get_graph()
     cypher = (
         "MATCH (r:RoadSegment {id: $road_id}) "
-        "OPTIONAL MATCH (r)-[:CONNECTS]->(loc:Location) "
-        "RETURN r, collect(DISTINCT loc) AS endpoints"
+        "OPTIONAL MATCH (u:Location {id: r.u}) "
+        "OPTIONAL MATCH (v:Location {id: r.v}) "
+        "RETURN r, [u, v] AS endpoints"
     )
-    res = graph.query(cypher, {"road_id": road_id})
-    if not res or not res.result_set:
+    road_result = graph.query(cypher, {"road_id": road_id})
+    if not road_result or not road_result.result_set:
         raise ValueError(f"RoadSegment with id '{road_id}' not found in FalkorDB")
 
-    road_node = res.result_set[0][0]
-    endpoints_raw = res.result_set[0][1]
+    road_node = road_result.result_set[0][0]
+    endpoints_raw = road_result.result_set[0][1]
 
     endpoints = [
         LocationModel(
@@ -210,12 +186,12 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
             district=loc.properties["district"],
             lat=float(loc.properties["lat"]),
             lon=float(loc.properties["lon"]),
-            households=int(loc.properties.get("households", 0))
+            households=int(loc.properties.get("households", 0)),
         )
-        for loc in endpoints_raw if loc
+        for loc in endpoints_raw
+        if loc
     ]
 
-    # Observations and sources
     obs_cypher = (
         "MATCH (r:RoadSegment {id: $road_id})-[:HAS_OBSERVATION]->(o:Observation)-[:FROM_SOURCE]->(s:Source) "
         "RETURN o, s "
@@ -234,10 +210,9 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
                 status=o_node.properties["status"],
                 note=o_node.properties["note"],
                 timestamp=o_node.properties["timestamp"],
-                is_simulated=bool(o_node.properties.get("is_simulated", False))
+                is_simulated=bool(o_node.properties.get("is_simulated", False)),
             ))
 
-    # Episodic memories
     mem_cypher = (
         "MATCH (e:EpisodicMemory)-[:AFFECTED_ROAD]->(r:RoadSegment {id: $road_id}) "
         "RETURN e "
@@ -255,10 +230,9 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
                 event_type=e_node.properties["event_type"],
                 summary=e_node.properties["summary"],
                 road_id=e_node.properties.get("road_id"),
-                timestamp=e_node.properties["timestamp"]
+                timestamp=e_node.properties["timestamp"],
             ))
 
-    # Bridges linked to this road segment
     bridge_cypher = (
         "MATCH (r:RoadSegment {id: $road_id})-[:INCLUDES_BRIDGE]->(b:Bridge) "
         "RETURN b "
@@ -276,7 +250,7 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
                 "location": b_node.properties.get("location", ""),
                 "district": b_node.properties.get("district", ""),
                 "lat": float(b_node.properties.get("lat", 0.0)),
-                "lon": float(b_node.properties.get("lon", 0.0))
+                "lon": float(b_node.properties.get("lon", 0.0)),
             })
 
     affected_settlements, aff_cypher = find_affected_settlements(road_id)
@@ -285,8 +259,8 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
     if "coordinates_json" in road_node.properties and road_node.properties["coordinates_json"]:
         try:
             coords = json.loads(road_node.properties["coordinates_json"])
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not parse coordinates_json for road %s: %s", road_id, exc)
 
     road_model = RoadSegmentModel(
         id=road_node.properties["id"],
@@ -299,7 +273,7 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
         observations=observations,
         coordinates=coords,
         bridges=road_bridges,
-        bridge_count=len(road_bridges)
+        bridge_count=len(road_bridges),
     )
 
     full_cypher = f"{cypher}\n-- Observations:\n{obs_cypher}\n-- Episodic Memory:\n{mem_cypher}\n-- Bridges:\n{bridge_cypher}\n-- Downstream:\n{aff_cypher}"
@@ -310,15 +284,12 @@ def get_road_evidence(road_id: str) -> Dict[str, Any]:
         "observations": observations,
         "memories": memories,
         "affected_settlements": affected_settlements,
-        "cypher_executed": full_cypher
+        "cypher_executed": full_cypher,
     }
 
+
 def get_decision_chain(road_id: str) -> Dict[str, Any]:
-    """
-    Connects People, Projects, and Decisions in FalkorDB:
-    Traverses (People:Source)-[:REPORTED]->(Observation)-[:LED_TO]->(Decision:EpisodicMemory)
-    and (Project:Mission)-[:INVESTIGATES]->(Asset:RoadSegment)-[:CONNECTS]->(Settlement).
-    """
+    """Traverses sources, observations, episodic memories, and missions for a road."""
     graph = get_graph()
     cypher = (
         "MATCH (r:RoadSegment {id: $road_id}) "
@@ -334,11 +305,11 @@ def get_decision_chain(road_id: str) -> Dict[str, Any]:
         "       collect(DISTINCT {id: e.id, agent_role: e.agent_role, event_type: e.event_type, summary: e.summary, timestamp: e.timestamp}) AS memories, "
         "       collect(DISTINCT {id: m.id, priority_score: m.priority_score, reason: m.reason}) AS missions"
     )
-    res = graph.query(cypher, {"road_id": road_id})
-    if not res or not res.result_set:
+    chain_result = graph.query(cypher, {"road_id": road_id})
+    if not chain_result or not chain_result.result_set:
         raise ValueError(f"RoadSegment with id '{road_id}' not found in FalkorDB")
 
-    row = res.result_set[0]
+    row = chain_result.result_set[0]
     return {
         "road_id": row[0],
         "road_name": row[1],
@@ -348,8 +319,9 @@ def get_decision_chain(road_id: str) -> Dict[str, Any]:
         "observations": [o for o in row[5] if o.get("id")],
         "decisions_memories": [m for m in row[6] if m.get("id")],
         "project_missions": [m for m in row[7] if m.get("id")],
-        "cypher_executed": cypher
+        "cypher_executed": cypher,
     }
+
 
 def add_observation_and_sync(
     road_id: str,
@@ -359,25 +331,19 @@ def add_observation_and_sync(
     is_simulated: bool = False,
     override: bool = False,
     session_id: str = "ops_session",
-    agent_role: str = "Field Coordinator"
+    agent_role: str = "Field Coordinator",
 ) -> Dict[str, Any]:
-    """
-    Atomically adds an observation, evaluates status conflict resolution,
-    synchronizes edge properties in FalkorDB, records episodic memory,
-    and returns the resulting road status.
-    """
+    """Records an observation, resolves consensus status, and syncs graph edges."""
     from backend.missions import recompute_missions
 
     graph = get_graph()
     obs_id = f"obs_{uuid.uuid4().hex[:8]}"
     ts = _current_timestamp()
 
-    # 0. Check if road segment exists
     road_check = graph.query("MATCH (r:RoadSegment {id: $road_id}) RETURN r.id", {"road_id": road_id})
     if not road_check or not road_check.result_set:
         raise ValueError(f"Road corridor '{road_id}' not found in FalkorDB. Cannot record observation.")
 
-    # 1. Create Observation and connect to RoadSegment and Source
     graph.query(
         "MERGE (s:Source {id: $source_id}) "
         "ON CREATE SET s.name = CASE $source_id "
@@ -385,7 +351,7 @@ def add_observation_and_sync(
         "  WHEN 'src_user' THEN 'Community Field Report' "
         "  WHEN 'src_scout' THEN 'Field Recon Scout Report' "
         "  ELSE $source_id END",
-        {"source_id": source_id}
+        {"source_id": source_id},
     )
     create_obs_cypher = (
         "MATCH (r:RoadSegment {id: $road_id}) "
@@ -402,30 +368,29 @@ def add_observation_and_sync(
         "CREATE (o)-[:FROM_SOURCE]->(s) "
         "RETURN o"
     )
-    res_obs = graph.query(create_obs_cypher, {
+    create_obs_result = graph.query(create_obs_cypher, {
         "road_id": road_id,
         "source_id": source_id,
         "obs_id": obs_id,
         "reported_status": reported_status,
         "note": note,
         "timestamp": ts,
-        "is_simulated": is_simulated
+        "is_simulated": is_simulated,
     })
-    if not res_obs or not res_obs.result_set:
+    if not create_obs_result or not create_obs_result.result_set:
         raise ValueError(f"Failed to record observation on road '{road_id}' from source '{source_id}'")
 
-    # 2. Query all observations for road_id to evaluate epistemic consensus
     all_obs_cypher = (
         "MATCH (r:RoadSegment {id: $road_id})-[:HAS_OBSERVATION]->(o:Observation) "
         "RETURN o.status AS status, o.source_id AS source_id"
     )
-    all_obs_res = graph.query(all_obs_cypher, {"road_id": road_id})
+    all_obs_result = graph.query(all_obs_cypher, {"road_id": road_id})
     statuses = set()
-    if all_obs_res and all_obs_res.result_set:
-        for r in all_obs_res.result_set:
+    if all_obs_result and all_obs_result.result_set:
+        for r in all_obs_result.result_set:
             statuses.add(r[0])
 
-    # Epistemic resolution logic
+    # Consensus resolution rules
     if (source_id == "src_scout" and override) or override:
         new_status = reported_status
         resolution_reason = "Authoritative field scout or operator with override authority resolved dispute"
@@ -445,7 +410,6 @@ def add_observation_and_sync(
         new_status = reported_status
         resolution_reason = f"Status updated to {reported_status}"
 
-    # 3. Synchronize RoadSegment node status AND all [:ROAD_TO {road_id: $road_id}] edges atomically
     sync_cypher = (
         "MATCH (r:RoadSegment {id: $road_id}) "
         "SET r.status = $new_status "
@@ -456,7 +420,6 @@ def add_observation_and_sync(
     )
     graph.query(sync_cypher, {"road_id": road_id, "new_status": new_status})
 
-    # 4. Record EpisodicMemory in FalkorDB (Track 02 Proof)
     memory_id = f"mem_{uuid.uuid4().hex[:8]}"
     summary = (
         f"Observation recorded on {road_id}: reported '{reported_status}' from '{source_id}'. "
@@ -482,10 +445,9 @@ def add_observation_and_sync(
         "session_id": session_id,
         "agent_role": agent_role,
         "summary": summary,
-        "timestamp": ts
+        "timestamp": ts,
     })
 
-    # 5. Recompute missions dynamically
     missions = recompute_missions()
 
     return {
@@ -495,19 +457,18 @@ def add_observation_and_sync(
         "resolution_reason": resolution_reason,
         "memory_id": memory_id,
         "missions_count": len(missions),
-        "timestamp": ts
+        "timestamp": ts,
     }
+
 
 def record_episodic_memory(
     session_id: str,
     agent_role: str,
     event_type: str,
     summary: str,
-    road_id: Optional[str] = None
+    road_id: Optional[str] = None,
 ) -> str:
-    """
-    Stores an episodic memory event in FalkorDB for agent coordination (Track 02).
-    """
+    """Stores an episodic memory event in FalkorDB."""
     graph = get_graph()
     memory_id = f"mem_{uuid.uuid4().hex[:8]}"
     ts = _current_timestamp()
@@ -534,7 +495,7 @@ def record_episodic_memory(
             "agent_role": agent_role,
             "event_type": event_type,
             "summary": summary,
-            "timestamp": ts
+            "timestamp": ts,
         })
     else:
         cypher = (
@@ -555,10 +516,11 @@ def record_episodic_memory(
             "agent_role": agent_role,
             "event_type": event_type,
             "summary": summary,
-            "timestamp": ts
+            "timestamp": ts,
         })
 
     return memory_id
+
 
 def get_episodic_memories(limit: int = 50, road_id: Optional[str] = None) -> List[EpisodicMemoryModel]:
     """Retrieves chronological timeline of episodic memories from FalkorDB."""
@@ -570,7 +532,7 @@ def get_episodic_memories(limit: int = 50, road_id: Optional[str] = None) -> Lis
             "ORDER BY e.timestamp DESC "
             "LIMIT $limit"
         )
-        res = graph.query(cypher, {"road_id": road_id, "limit": limit})
+        memory_result = graph.query(cypher, {"road_id": road_id, "limit": limit})
     else:
         cypher = (
             "MATCH (e:EpisodicMemory) "
@@ -578,11 +540,11 @@ def get_episodic_memories(limit: int = 50, road_id: Optional[str] = None) -> Lis
             "ORDER BY e.timestamp DESC "
             "LIMIT $limit"
         )
-        res = graph.query(cypher, {"limit": limit})
+        memory_result = graph.query(cypher, {"limit": limit})
 
     memories = []
-    if res and res.result_set:
-        for row in res.result_set:
+    if memory_result and memory_result.result_set:
+        for row in memory_result.result_set:
             e = row[0]
             memories.append(EpisodicMemoryModel(
                 id=e.properties.get("id", ""),
@@ -591,38 +553,34 @@ def get_episodic_memories(limit: int = 50, road_id: Optional[str] = None) -> Lis
                 event_type=e.properties.get("event_type", ""),
                 summary=e.properties.get("summary", ""),
                 road_id=e.properties.get("road_id") or None,
-                timestamp=e.properties.get("timestamp", "")
+                timestamp=e.properties.get("timestamp", ""),
             ))
     return memories
 
+
 def get_network_snapshot() -> Dict[str, Any]:
-    """
-    Fetches the complete current state of the flood network directly from FalkorDB.
-    Every metric, classification, and KPI is computed live.
-    """
+    """Fetches the complete current state of the flood network directly from FalkorDB."""
     graph = get_graph()
 
-    # 1. Fetch Locations
-    loc_res = graph.query("MATCH (l:Location) RETURN l ORDER BY l.name ASC")
+    loc_result = graph.query("MATCH (l:Location) RETURN l ORDER BY l.name ASC")
     locations_dict: Dict[str, Dict[str, Any]] = {}
-    if loc_res and loc_res.result_set:
-        for row in loc_res.result_set:
-            l = row[0].properties
-            locations_dict[l["id"]] = {
-                "id": l["id"],
-                "name": l["name"],
-                "type": l["type"],
-                "district": l["district"],
-                "lat": float(l["lat"]),
-                "lon": float(l["lon"]),
-                "households": int(l.get("households", 0)),
+    if loc_result and loc_result.result_set:
+        for row in loc_result.result_set:
+            loc_props = row[0].properties
+            locations_dict[loc_props["id"]] = {
+                "id": loc_props["id"],
+                "name": loc_props["name"],
+                "type": loc_props["type"],
+                "district": loc_props["district"],
+                "lat": float(loc_props["lat"]),
+                "lon": float(loc_props["lon"]),
+                "households": int(loc_props.get("households", 0)),
                 "access_state": None,
                 "access_reason": None,
                 "verified_paths_count": 0,
-                "potential_paths_count": 0
+                "potential_paths_count": 0,
             }
 
-    # Classify settlements
     settlements = [loc for loc in locations_dict.values() if loc["type"] == "settlement"]
     verified_settlements = 0
     needs_recon_settlements = 0
@@ -641,29 +599,27 @@ def get_network_snapshot() -> Dict[str, Any]:
         elif state == "ISOLATED_ON_MAP":
             isolated_settlements += 1
 
-    # 2. Fetch Facilities
-    fac_res = graph.query("MATCH (f:Facility) RETURN f")
+    fac_result = graph.query("MATCH (f:Facility) RETURN f")
     facilities = []
-    if fac_res and fac_res.result_set:
-        for row in fac_res.result_set:
+    if fac_result and fac_result.result_set:
+        for row in fac_result.result_set:
             f = row[0].properties
             facilities.append(FacilityModel(
                 id=f["id"],
                 name=f["name"],
                 location_id=f["location_id"],
                 type=f["type"],
-                importance_weight=float(f["importance_weight"])
+                importance_weight=float(f["importance_weight"]),
             ))
 
-    # 3. Fetch RoadSegments
-    # Pre-fetch all bridges grouped by road to eliminate N+1 Cypher query bottleneck (Problem H)
+    # Pre-fetch bridges grouped by road to avoid N+1 queries
     bridges_by_road: Dict[str, List[Dict[str, Any]]] = {}
-    b_all_res = graph.query(
+    bridges_result = graph.query(
         "MATCH (r:RoadSegment)-[:INCLUDES_BRIDGE]->(b:Bridge) "
         "RETURN r.id AS road_id, b.name AS name, b.status AS status, b.lat AS lat, b.lon AS lon"
     )
-    if b_all_res and b_all_res.result_set:
-        for b_row in b_all_res.result_set:
+    if bridges_result and bridges_result.result_set:
+        for b_row in bridges_result.result_set:
             brid = str(b_row[0])
             if brid not in bridges_by_road:
                 bridges_by_road[brid] = []
@@ -671,18 +627,18 @@ def get_network_snapshot() -> Dict[str, Any]:
                 "name": b_row[1],
                 "status": b_row[2],
                 "lat": float(b_row[3]),
-                "lon": float(b_row[4])
+                "lon": float(b_row[4]),
             })
 
-    road_res = graph.query("MATCH (r:RoadSegment) RETURN r")
+    roads_result = graph.query("MATCH (r:RoadSegment) RETURN r")
     roads = []
     verified_roads = 0
     unknown_roads = 0
     blocked_roads = 0
     disputed_roads = 0
 
-    if road_res and road_res.result_set:
-        for row in road_res.result_set:
+    if roads_result and roads_result.result_set:
+        for row in roads_result.result_set:
             r = row[0].properties
             status = r["status"]
             if status == "verified_passable":
@@ -698,8 +654,8 @@ def get_network_snapshot() -> Dict[str, Any]:
             if "coordinates_json" in r and r["coordinates_json"]:
                 try:
                     coords = json.loads(r["coordinates_json"])
-                except Exception:
-                    pass
+                except Exception as exc:
+                    logger.warning("Could not parse coordinates_json: %s", exc)
 
             if not coords:
                 u_loc = locations_dict.get(r["u"])
@@ -707,7 +663,6 @@ def get_network_snapshot() -> Dict[str, Any]:
                 if u_loc and v_loc:
                     coords = [[u_loc["lon"], u_loc["lat"]], [v_loc["lon"], v_loc["lat"]]]
 
-            # Fetch bridge count and names for this road from pre-fetched map
             road_bridges = bridges_by_road.get(r["id"], [])
 
             roads.append(RoadSegmentModel(
@@ -720,15 +675,14 @@ def get_network_snapshot() -> Dict[str, Any]:
                 status=status,
                 coordinates=coords,
                 bridges=road_bridges,
-                bridge_count=len(road_bridges)
+                bridge_count=len(road_bridges),
             ))
 
-    # 4. Count active missions and memories
-    mission_res = graph.query("MATCH (m:Mission) RETURN count(m)")
-    active_missions = int(mission_res.result_set[0][0]) if mission_res and mission_res.result_set else 0
+    mission_result = graph.query("MATCH (m:Mission) RETURN count(m)")
+    active_missions = int(mission_result.result_set[0][0]) if mission_result and mission_result.result_set else 0
 
-    mem_res = graph.query("MATCH (e:EpisodicMemory) RETURN count(e)")
-    total_memories = int(mem_res.result_set[0][0]) if mem_res and mem_res.result_set else 0
+    memory_result = graph.query("MATCH (e:EpisodicMemory) RETURN count(e)")
+    total_memories = int(memory_result.result_set[0][0]) if memory_result and memory_result.result_set else 0
 
     kpis = KPISummary(
         verified_settlements=verified_settlements,
@@ -739,12 +693,11 @@ def get_network_snapshot() -> Dict[str, Any]:
         blocked_roads=blocked_roads,
         disputed_roads=disputed_roads,
         active_missions=active_missions,
-        episodic_memories=total_memories
+        episodic_memories=total_memories,
     )
 
     location_models = [LocationModel(**loc) for loc in locations_dict.values()]
 
-    # Load real building and bridge summaries from data/
     data_dir = Path(__file__).resolve().parent.parent / "data"
     bldg_summary_path = data_dir / "building_damage_summary.json"
     bldg_summary = None
@@ -752,16 +705,16 @@ def get_network_snapshot() -> Dict[str, Any]:
         try:
             with open(bldg_summary_path, "r", encoding="utf-8") as f:
                 bldg_summary = json.load(f)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not read building_damage_summary.json: %s", exc)
 
-    bridge_summary_res = graph.query(
+    bridge_summary_result = graph.query(
         "MATCH (b:Bridge) "
         "RETURN b.status, count(b)"
     )
     bridge_summary = {}
-    if bridge_summary_res and bridge_summary_res.result_set:
-        for b_row in bridge_summary_res.result_set:
+    if bridge_summary_result and bridge_summary_result.result_set:
+        for b_row in bridge_summary_result.result_set:
             bridge_summary[b_row[0]] = int(b_row[1])
 
     is_empty = len(location_models) == 0
@@ -774,62 +727,58 @@ def get_network_snapshot() -> Dict[str, Any]:
         "is_empty": is_empty,
         "building_summary": bldg_summary,
         "bridge_summary": bridge_summary,
-        "timestamp": _current_timestamp()
+        "timestamp": _current_timestamp(),
     }
 
+
 def wipe_falkordb_graph() -> Dict[str, Any]:
-    """
-    Executes a complete graph wipe on FalkorDB (MATCH (n) DETACH DELETE n),
-    resetting the database to 0 nodes and 0 edges.
-    """
+    """Wipes the FalkorDB graph, removing all nodes and edges."""
     graph = get_graph()
-    count_res = graph.query("MATCH (n) RETURN count(n)")
-    prior_nodes = int(count_res.result_set[0][0]) if count_res and count_res.result_set else 0
+    count_result = graph.query("MATCH (n) RETURN count(n)")
+    prior_nodes = int(count_result.result_set[0][0]) if count_result and count_result.result_set else 0
     graph.query("MATCH (n) DETACH DELETE n")
     return {
         "status": "wiped",
         "nodes_deleted": prior_nodes,
         "is_empty": True,
-        "timestamp": _current_timestamp()
+        "timestamp": _current_timestamp(),
     }
 
+
 def get_bridge_damage_summary() -> Dict[str, Any]:
-    """
-    Queries FalkorDB for the flood damage status counts of all surveyed bridges.
-    Distinguishes database absence/errors from zero counts, and never uses hardcoded defaults.
-    """
+    """Queries damage status counts of all surveyed bridges."""
     graph = get_graph()
     cypher = "MATCH (b:Bridge) RETURN b.status AS status, count(b) AS count"
     try:
-        res = graph.query(cypher)
-        if not res or not res.result_set:
+        damage_result = graph.query(cypher)
+        if not damage_result or not damage_result.result_set:
             return {
                 "status": "unavailable",
                 "reason": "No surveyed bridge records found in FalkorDB graph.",
                 "counts": {},
                 "total": 0,
-                "cypher_executed": cypher
+                "cypher_executed": cypher,
             }
-        counts = {str(row[0]): int(row[1]) for row in res.result_set}
+        counts = {str(row[0]): int(row[1]) for row in damage_result.result_set}
         return {
             "status": "ok",
             "counts": counts,
             "total": sum(counts.values()),
-            "cypher_executed": cypher
+            "cypher_executed": cypher,
         }
     except Exception as e:
+        logger.warning("FalkorDB bridge summary query error: %s", e)
         return {
             "status": "error",
             "reason": f"FalkorDB query error: {str(e)}",
             "counts": {},
             "total": 0,
-            "cypher_executed": cypher
+            "cypher_executed": cypher,
         }
 
+
 def get_on_site_facilities(settlement_id: str) -> List[Dict[str, Any]]:
-    """
-    Returns healthcare facilities directly situated at this settlement/location.
-    """
+    """Returns healthcare facilities situated directly at a settlement."""
     if not settlement_id:
         return []
     graph = get_graph()
@@ -837,17 +786,18 @@ def get_on_site_facilities(settlement_id: str) -> List[Dict[str, Any]]:
         "MATCH (f:Facility)-[:AT_LOCATION]->(l:Location {id: $settlement_id}) "
         "RETURN f.id, f.name, f.type, f.importance_weight"
     )
-    res = graph.query(cypher, {"settlement_id": settlement_id})
+    facility_result = graph.query(cypher, {"settlement_id": settlement_id})
     facs = []
-    if res and res.result_set:
-        for row in res.result_set:
+    if facility_result and facility_result.result_set:
+        for row in facility_result.result_set:
             facs.append({
                 "id": str(row[0]),
                 "name": str(row[1]),
                 "type": str(row[2]) if row[2] else "facility",
-                "importance_weight": float(row[3]) if row[3] is not None else 1.0
+                "importance_weight": float(row[3]) if row[3] is not None else 1.0,
             })
     return facs
+
 
 LOCATION_ALIASES: Dict[str, str] = {
     "syabrubesi": "loc_syabrubesi",
@@ -865,7 +815,7 @@ LOCATION_ALIASES: Dict[str, str] = {
     "devighat": "loc_devighat",
     "trishuli": "loc_bidur",
     "trisuli": "loc_bidur",
-    # Facility-specific aliases
+    # Facility aliases
     "betrawati hospital": "loc_betrawati",
     "betrawati health post": "loc_betrawati",
     "betrawati clinic": "loc_betrawati",
@@ -874,7 +824,7 @@ LOCATION_ALIASES: Dict[str, str] = {
     "bidur hospital": "loc_bidur",
     "rasuwa hospital": "loc_dhunche",
     "rasuwa district hospital": "loc_dhunche",
-    "dhunche hospital": "loc_dhunche"
+    "dhunche hospital": "loc_dhunche",
 }
 
 ROAD_ALIASES: Dict[str, str] = {
@@ -895,7 +845,7 @@ ROAD_ALIASES: Dict[str, str] = {
     "gatlang-kispang": "road_gatlang_kispang",
     "kispang-betrawati": "road_kispang_betrawati",
     "betrawati-bidur": "road_betrawati_bidur",
-    "devighat-bidur": "road_devighat_bidur"
+    "devighat-bidur": "road_devighat_bidur",
 }
 
 SETTLEMENT_CANONICAL_NAMES: Dict[str, str] = {
@@ -910,20 +860,17 @@ SETTLEMENT_CANONICAL_NAMES: Dict[str, str] = {
     "loc_kalikasthan": "Kalikasthan",
     "loc_betrawati": "Betrawati",
     "loc_bidur": "Bidur / Trishuli",
-    "loc_devighat": "Devighat"
+    "loc_devighat": "Devighat",
 }
 
+
 def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], List[str]]:
-    """
-    Deterministically resolves a settlement identifier or alias.
-    Returns (settlement_id, display_name, candidates).
-    NEVER silently defaults to a fallback settlement.
-    """
+    """Resolves a settlement identifier or alias. Returns (id, display_name, candidates)."""
     if not name_or_alias or not isinstance(name_or_alias, str):
         return None, None, list(LOCATION_ALIASES.keys())
 
     clean = name_or_alias.strip().lower()
-    # 1. Exact match on ID
+
     if clean.startswith("loc_"):
         if clean in SETTLEMENT_CANONICAL_NAMES:
             return clean, SETTLEMENT_CANONICAL_NAMES[clean], []
@@ -931,20 +878,18 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
             if lid == clean:
                 return lid, SETTLEMENT_CANONICAL_NAMES.get(lid, alias.capitalize()), []
         try:
-            g = get_graph()
-            check = g.query("MATCH (s:Location {id: $id}) RETURN s.name", {"id": clean})
+            graph = get_graph()
+            check = graph.query("MATCH (s:Location {id: $id}) RETURN s.name", {"id": clean})
             if check and check.result_set:
                 return clean, check.result_set[0][0], []
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed direct settlement lookup for %s: %s", clean, exc)
         return None, None, list(LOCATION_ALIASES.keys())[:5]
 
-    # 2. Exact match on alias
     if clean in LOCATION_ALIASES:
         lid = LOCATION_ALIASES[clean]
         return lid, SETTLEMENT_CANONICAL_NAMES.get(lid, clean.capitalize()), []
 
-    # 3. Substring match
     candidates = []
     for alias, lid in LOCATION_ALIASES.items():
         if alias in clean or clean in alias:
@@ -957,8 +902,6 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
     elif len(unique_lids) > 1:
         return None, None, [c[0].capitalize() for c in candidates]
 
-    # 4. Fuzzy match close candidates
-    import difflib
     fuzzy = difflib.get_close_matches(clean, list(LOCATION_ALIASES.keys()), n=3, cutoff=0.6)
     if len(fuzzy) == 1:
         matched_alias = fuzzy[0]
@@ -967,35 +910,31 @@ def resolve_settlement_id(name_or_alias: str) -> Tuple[Optional[str], Optional[s
 
     return None, None, [f.capitalize() for f in fuzzy] if fuzzy else list(LOCATION_ALIASES.keys())[:5]
 
+
 def resolve_road_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], List[str]]:
-    """
-    Deterministically resolves a road corridor identifier or alias.
-    Returns (road_id, display_name, candidates).
-    NEVER silently defaults to a fallback road.
-    """
+    """Resolves a road corridor identifier or alias. Returns (road_id, display_name, candidates)."""
     if not name_or_alias or not isinstance(name_or_alias, str):
         return None, None, list(ROAD_ALIASES.keys())
 
     clean = name_or_alias.strip().lower()
-    # 1. Exact match on road_id
+
     if clean.startswith("road_"):
         for alias, rid in ROAD_ALIASES.items():
             if rid == clean:
                 return rid, alias.replace("-", "–").title(), []
         try:
-            g = get_graph()
-            check = g.query("MATCH (r:RoadSegment {id: $id}) RETURN r.name", {"id": clean})
+            graph = get_graph()
+            check = graph.query("MATCH (r:RoadSegment {id: $id}) RETURN r.name", {"id": clean})
             if check and check.result_set:
                 return clean, check.result_set[0][0], []
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("Failed direct road lookup for %s: %s", clean, exc)
         return None, None, list(ROAD_ALIASES.keys())[:5]
 
-    # 2. Exact match on alias
     if clean in ROAD_ALIASES:
         return ROAD_ALIASES[clean], clean.replace("-", "–").title(), []
 
-    # 3. Keyword / endpoint pairs
+    # Common corridor endpoint pairs
     if ("briddhim" in clean or "bridhim" in clean) and "syabru" in clean:
         return "road_briddhim_syabru", "Briddhim–Syabrubesi", []
     if "timure" in clean and "syabru" in clean:
@@ -1023,7 +962,6 @@ def resolve_road_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], L
     if "devighat" in clean and "bidur" in clean:
         return "road_devighat_bidur", "Devighat–Bidur", []
 
-    # 4. Substring match
     candidates = []
     for alias, rid in ROAD_ALIASES.items():
         if alias in clean or clean in alias:
@@ -1038,8 +976,6 @@ def resolve_road_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], L
             return rid, candidates[0][0].replace("-", "–").title(), []
         return None, None, [c[0].replace("-", "–").title() for c in candidates]
 
-    # 5. Fuzzy match
-    import difflib
     fuzzy = difflib.get_close_matches(clean, list(ROAD_ALIASES.keys()), n=3, cutoff=0.55)
     if len(fuzzy) == 1:
         matched = fuzzy[0]
@@ -1047,56 +983,46 @@ def resolve_road_id(name_or_alias: str) -> Tuple[Optional[str], Optional[str], L
 
     return None, None, [f.replace("-", "–").title() for f in fuzzy] if fuzzy else list(ROAD_ALIASES.keys())[:5]
 
-_LOCATION_CATALOG_CACHE = None
-_LOCATION_CATALOG_TIME = 0.0
+
+_LOCATION_CATALOG_CACHE: Optional[Dict[str, str]] = None
+_LOCATION_CATALOG_TIME: float = 0.0
+
 
 def get_dynamic_location_catalog() -> Dict[str, str]:
-    """
-    Retrieves all Locations directly from FalkorDB.
-    Returns mapping of lowercase alias/name -> location_id.
-    Cached for 30 seconds to support dynamic graph imports without latency.
-    """
+    """Retrieves all locations from FalkorDB with 30-second caching."""
     global _LOCATION_CATALOG_CACHE, _LOCATION_CATALOG_TIME
-    import time
     now = time.time()
     if _LOCATION_CATALOG_CACHE is not None and (now - _LOCATION_CATALOG_TIME) < 30.0:
         return _LOCATION_CATALOG_CACHE
 
     catalog = dict(LOCATION_ALIASES)
     try:
-        g = get_graph()
-        res = g.query("MATCH (l:Location) RETURN l.id, l.name")
-        if res and res.result_set:
-            for row in res.result_set:
+        graph = get_graph()
+        query_result = graph.query("MATCH (l:Location) RETURN l.id, l.name")
+        if query_result and query_result.result_set:
+            for row in query_result.result_set:
                 lid = str(row[0])
                 lname = str(row[1])
                 catalog[lname.lower()] = lid
                 for part in re.split(r"[\s/–-]+", lname.lower()):
                     if len(part) >= 3 and part not in catalog:
                         catalog[part] = lid
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("Could not refresh dynamic location catalog: %s", exc)
 
     _LOCATION_CATALOG_CACHE = catalog
     _LOCATION_CATALOG_TIME = now
     return catalog
 
+
 def extract_corridor_endpoints(text: str) -> Tuple[Optional[Tuple[str, str]], Optional[Tuple[str, str]]]:
-    """
-    Dynamically extracts origin and destination locations from natural language queries.
-    Returns ((origin_id, origin_name), (dest_id, dest_name)) or (None, None).
-    Handles directionality patterns:
-      - 'reach <B> from <A>' / 'to <B> from <A>' -> origin = A, dest = B
-      - 'from <A> to <B>' / 'between <A> and <B>' -> origin = A, dest = B
-      - default: origin = first_mentioned, dest = second_mentioned
-    """
+    """Extracts origin and destination locations from natural language queries."""
     if not text or not isinstance(text, str):
         return None, None
 
     clean = text.lower()
     catalog = get_dynamic_location_catalog()
 
-    # Find all location matches with their character spans in the text
     matches = []
     for alias, lid in catalog.items():
         pattern = r"\b" + re.escape(alias) + r"\b"
@@ -1106,7 +1032,6 @@ def extract_corridor_endpoints(text: str) -> Tuple[Optional[Tuple[str, str]], Op
     if not matches:
         return None, None
 
-    # Filter overlapping matches, preferring longer aliases
     matches.sort(key=lambda x: (x[0], -(x[1] - x[0])))
     filtered = []
     last_end = -1
@@ -1115,7 +1040,6 @@ def extract_corridor_endpoints(text: str) -> Tuple[Optional[Tuple[str, str]], Op
             filtered.append((start, end, alias, lid))
             last_end = end
 
-    # Group by unique location ID in order of appearance
     unique_locs = []
     seen_lids = set()
     for start, end, alias, lid in filtered:
@@ -1151,15 +1075,11 @@ def extract_corridor_endpoints(text: str) -> Tuple[Optional[Tuple[str, str]], Op
         elif from_idx < unique_locs[1][0] < to_idx and to_idx < unique_locs[0][0]:
             return loc_b, loc_a
 
-    # Default order: first mentioned is origin, second is destination
     return loc_a, loc_b
 
+
 def find_route_between(origin_input: str, destination_input: str) -> Dict[str, Any]:
-    """
-    Evaluates topological connectivity and multi-hop paths between two locations.
-    Classifies routes by tier (1=Verified Passable, 2=Needs Recon, 3=Blocked)
-    and cross-references unverified segments with active (:Mission) nodes.
-    """
+    """Evaluates multi-hop paths between two locations, classifying routes by passability tier."""
     orig_id, orig_name, orig_cands = resolve_settlement_id(origin_input)
     dest_id, dest_name, dest_cands = resolve_settlement_id(destination_input)
 
@@ -1167,13 +1087,13 @@ def find_route_between(origin_input: str, destination_input: str) -> Dict[str, A
         return {
             "status": "unresolved",
             "message": f"Origin location '{origin_input}' could not be identified in FalkorDB.",
-            "candidates": orig_cands
+            "candidates": orig_cands,
         }
     if not dest_id:
         return {
             "status": "unresolved",
             "message": f"Destination location '{destination_input}' could not be identified in FalkorDB.",
-            "candidates": dest_cands
+            "candidates": dest_cands,
         }
 
     cypher = (
@@ -1195,12 +1115,12 @@ def find_route_between(origin_input: str, destination_input: str) -> Dict[str, A
     )
 
     graph = get_graph()
-    res = graph.query(cypher, {"origin_id": orig_id, "dest_id": dest_id})
+    route_result = graph.query(cypher, {"origin_id": orig_id, "dest_id": dest_id})
     routes = []
     all_unverified_rids = set()
 
-    if res and res.result_set:
-        for row in res.result_set:
+    if route_result and route_result.result_set:
+        for row in route_result.result_set:
             locs = row[0]
             segs = row[1]
             total_km = round(float(row[2]), 2)
@@ -1221,33 +1141,33 @@ def find_route_between(origin_input: str, destination_input: str) -> Dict[str, A
                 "tier": tier,
                 "tier_label": tier_label,
                 "locations": locs,
-                "location_names": [l["name"] for l in locs],
+                "location_names": [loc["name"] for loc in locs],
                 "segments": segs,
                 "road_names": [s["name"] for s in segs],
                 "road_ids": [s["road_id"] for s in segs],
                 "total_km": total_km,
                 "bottlenecks": bottlenecks,
-                "linked_missions": []
+                "linked_missions": [],
             })
 
-    # Auto-link unverified segments with active (:Mission) nodes in FalkorDB
+    # Link unverified segments with active missions
     missions_by_rid = {}
     if all_unverified_rids:
         try:
-            m_res = graph.query(
+            mission_result = graph.query(
                 "MATCH (m:Mission) WHERE m.road_id IN $rids RETURN m.road_id, m.id, m.priority_score, m.reason",
-                {"rids": list(all_unverified_rids)}
+                {"rids": list(all_unverified_rids)},
             )
-            if m_res and m_res.result_set:
-                for m_row in m_res.result_set:
+            if mission_result and mission_result.result_set:
+                for m_row in mission_result.result_set:
                     missions_by_rid[str(m_row[0])] = {
                         "road_id": str(m_row[0]),
                         "mission_id": str(m_row[1]),
                         "priority_score": float(m_row[2]),
-                        "reason": str(m_row[3])
+                        "reason": str(m_row[3]),
                     }
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Could not link missions to unverified routes: %s", exc)
 
     for r in routes:
         for b in r["bottlenecks"]:
@@ -1274,5 +1194,5 @@ def find_route_between(origin_input: str, destination_input: str) -> Dict[str, A
         "routes_count": len(routes),
         "routes": routes,
         "primary_route": routes[0] if routes else None,
-        "cypher_executed": cypher.replace("$origin_id", f"'{orig_id}'").replace("$dest_id", f"'{dest_id}'")
+        "cypher_executed": cypher.replace("$origin_id", f"'{orig_id}'").replace("$dest_id", f"'{dest_id}'"),
     }

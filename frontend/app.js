@@ -1,10 +1,8 @@
-/**
- * Badi (बाढी)
- */
-
 const API_BASE = "";
+const HEALTH_CHECK_INTERVAL_MS = 15000;
+const MAP_RESIZE_DELAY_MS = 500;
 
-// State
+// Application state
 let networkState = null;
 let currentMissions = [];
 let selectedElement = null; // { type: 'road' | 'settlement' | 'bridge', id: string, data?: any }
@@ -15,28 +13,23 @@ let allBridgesData = [];
 let currentBridgeFilter = "ALL";
 let currentReconFilter = "ALL";
 
-// Initialize application on DOM ready
 document.addEventListener("DOMContentLoaded", () => {
   initMap();
   setupTabs();
   setupEventHandlers();
   loadAllData();
 
-  // Resize map after layout settles
   window.addEventListener("resize", () => {
     if (map) map.resize();
   });
   setTimeout(() => {
     if (map) map.resize();
-  }, 500);
+  }, MAP_RESIZE_DELAY_MS);
 
-  // Periodic health check every 15s
-  setInterval(checkHealth, 15000);
+  setInterval(checkHealth, HEALTH_CHECK_INTERVAL_MS);
 });
 
-/* ==========================================================================
-   Map Initialization & Renderers (MapLibre GL + HOT Flood PMTiles)
-   ========================================================================== */
+// Map initialization and layer configuration
 function initMap() {
   if (typeof maplibregl === "undefined" || typeof pmtiles === "undefined") {
     console.warn("MapLibre or PMTiles library not ready yet, retrying in 100ms...");
@@ -83,7 +76,7 @@ function initMap() {
             type: "raster",
             source: "satellite"
           },
-          // 2. Real-World Roads from HOT OSM Flood dataset (Background topographic reference)
+          // Background road geometry from HOT dataset
           {
             id: "roads-osm-line",
             type: "line",
@@ -96,7 +89,7 @@ function initMap() {
               "line-opacity": 0.38
             }
           },
-          // 3. Real-World Bridges from HOT OSM Flood dataset
+          // Bridge lines from HOT dataset
           {
             id: "bridges-osm-line",
             type: "line",
@@ -109,7 +102,7 @@ function initMap() {
               "line-opacity": 0.65
             }
           },
-          // 4. Destroyed & Damaged Features (Flooded bridges and washed out roads)
+          // Damaged and flooded infrastructure overlays
           {
             id: "destroyed-features-line",
             type: "line",
@@ -122,7 +115,7 @@ function initMap() {
               "line-dasharray": [2, 2]
             }
           },
-          // 5. White Glow Aura for Selected Edge(s) (Positioned underneath road casing to preserve original structure)
+          // Selection halo positioned below casing
           {
             id: "network-roads-halo",
             type: "line",
@@ -140,7 +133,7 @@ function initMap() {
               "line-blur": 2.5
             }
           },
-          // 5b. White Edge Highlight Casing (Positioned directly under dark road casing to frame outer edges in crisp white)
+          // Selection edge highlight casing
           {
             id: "network-roads-selection-casing",
             type: "line",
@@ -158,7 +151,7 @@ function initMap() {
               "line-blur": 0
             }
           },
-          // 6. FalkorDB Lifelines Casing (Thick dark halo for high contrast over satellite)
+          // High-contrast dark casing for road lifelines
           {
             id: "network-roads-casing",
             type: "line",
@@ -174,7 +167,7 @@ function initMap() {
               "line-opacity": 0.95
             }
           },
-          // 7. FalkorDB Lifelines Solid (Passable = Emerald, Blocked = Crimson)
+          // Verified passable and blocked corridors
           {
             id: "network-roads-line",
             type: "line",
@@ -196,7 +189,7 @@ function initMap() {
               ]
             }
           },
-          // 8. FalkorDB Lifelines Dashed (Unknown = Amber, Disputed = Magenta)
+          // Unknown and disputed corridors
           {
             id: "network-roads-dashed",
             type: "line",
@@ -327,7 +320,7 @@ function renderMapNetwork(data) {
     facilitiesByLocation[fac.location_id] = fac;
   });
 
-  // 1. Render all 12 Disaster Graph Nodes directly pinned on real coordinates with exact center anchor
+  // Render disaster graph nodes pinned on coordinates
   data.locations.forEach(loc => {
     let markerClass = "marker-verified";
     if (loc.access_state === "NEEDS_RECON") {
@@ -368,7 +361,7 @@ function renderMapNetwork(data) {
       selectSettlement(loc.id);
     });
 
-    // Exact center anchor locks the node circle directly on the road junction at all zoom levels
+    // Center anchor locks node circle on junction
     const marker = new maplibregl.Marker({ element: el, anchor: "center" })
       .setLngLat([loc.lon, loc.lat])
       .addTo(map);
@@ -376,12 +369,12 @@ function renderMapNetwork(data) {
     currentMarkers.push(marker);
   });
 
-  // 3. Render Real Curved Road Lifelines from FalkorDB
+  // FalkorDB road lifelines
   if (data.road_segments) {
     updateMapRoads(data.road_segments);
   }
 
-  // 4. Load & Render 58 Bridge Damage Survey Points
+  // Surveyed bridge damage markers
   if (allBridgesData.length === 0) {
     loadAndRenderBridges();
   }
@@ -534,9 +527,7 @@ function fitMapToNetwork() {
 }
 
 
-/* ==========================================================================
-   Data Fetching & State Updates
-   ========================================================================== */
+// Data fetching and state synchronization
 async function loadAllData() {
   try {
     await Promise.all([
@@ -680,9 +671,7 @@ function updateKPIS(kpi) {
   }
 }
 
-/* ==========================================================================
-   Mission Queue Renderers
-   ========================================================================== */
+// Mission queue rendering
 function renderMissions(missions) {
   const container = document.getElementById("missions-container");
   const countBadge = document.getElementById("missions-count-badge");
@@ -776,9 +765,7 @@ function renderMissions(missions) {
   });
 }
 
-/* ==========================================================================
-   Inspector & Evidence Chain
-   ========================================================================== */
+// Inspector and evidence chain
 function inspectNearestLifeline(featureName, lng, lat) {
   if (!networkState || !networkState.road_segments || networkState.road_segments.length === 0) {
     showToast("Road network data loading...", "info");
@@ -876,17 +863,15 @@ async function selectRoad(roadId) {
   }
 }
 
-/* ==========================================================================
-   Visual Map Path Focusing & Multi-Segment Highlighting
-   ========================================================================== */
+// Map corridor focusing and highlight overlays
 function focusCorridorOnMap(roadIds, options = {}) {
   if (!map) return;
   const ids = Array.isArray(roadIds) ? roadIds.filter(Boolean) : (roadIds ? [roadIds] : []);
 
-  // 1. Highlight all road segments in this corridor with white edge outline preserving original colors
+  // Highlight road segments with white edge outline preserving original colors
   applyRoadFilter(ids);
 
-  // 2. Compute bounding box across all road coordinates and included locations
+  // Compute bounding box across road coordinates and locations
   const bounds = new maplibregl.LngLatBounds();
   let hasCoords = false;
 
@@ -911,7 +896,7 @@ function focusCorridorOnMap(roadIds, options = {}) {
     });
   }
 
-  // 3. Smooth fit bounds with right margin for open side dock
+  // Fit bounds taking into account open side dock margin
   if (hasCoords) {
     const isDockCollapsed = document.getElementById("main-content")?.classList.contains("dock-collapsed");
     const rightPadding = isDockCollapsed ? 80 : 380;
@@ -923,7 +908,7 @@ function focusCorridorOnMap(roadIds, options = {}) {
     });
   }
 
-  // 4. Highlight specific settlement markers with pulsing animation
+  // Highlight endpoint markers with pulse effect
   if (options.settlements && options.settlements.length > 0) {
     highlightSettlementMarkers(options.settlements);
   }
@@ -1308,9 +1293,7 @@ function renderSettlementInspector(data) {
   document.getElementById("insp-cypher-code").innerText = data.cypher_executed;
 }
 
-/* ==========================================================================
-   Episodic Memory Feed (Track 02)
-   ========================================================================== */
+// Episodic memory timeline
 function renderMemories(memories) {
   const container = document.getElementById("memory-timeline-container");
   if (!memories || memories.length === 0) {
@@ -1330,9 +1313,7 @@ function renderMemories(memories) {
   `).join("");
 }
 
-/* ==========================================================================
-   Agent Chat Workflows
-   ========================================================================== */
+// Agent chat workflows
 async function sendAgentQuery(promptText) {
   if (!promptText || !promptText.trim()) return;
 
@@ -1454,9 +1435,7 @@ async function sendAgentQuery(promptText) {
   chatContainer.scrollTop = chatContainer.scrollHeight;
 }
 
-/* ==========================================================================
-   Quick Field Scout Actions
-   ========================================================================== */
+// Ground scout observation actions
 async function quickVerifyPassable(roadId, event) {
   if (event) event.stopPropagation();
   try {
@@ -1507,9 +1486,7 @@ async function quickConfirmBlocked(roadId, event) {
   }
 }
 
-/* ==========================================================================
-   Tabs, Side Dock & Event Handlers
-   ========================================================================== */
+// Side dock navigation and event handlers
 let isDockCollapsed = false;
 
 function toggleSideDock() {
@@ -1881,9 +1858,7 @@ function escapeHtml(str) {
     .replace(/'/g, "&#039;");
 }
 
-/* ==========================================================================
-   Agent Markdown Formatter (Rich semantic HTML parser)
-   ========================================================================== */
+// Markdown formatter for agent responses
 function formatMarkdown(raw) {
   if (!raw) return "";
   let text = String(raw).trim();
@@ -1905,26 +1880,26 @@ function formatMarkdown(raw) {
     return `__CODE_BLOCK_${idx}__`;
   });
 
-  // 2. Escape HTML
+  // Escape HTML entities
   text = escapeHtml(text);
 
-  // 3. Headers: ###, ##, #
+  // Headings
   text = text.replace(/^### (.*$)/gim, '<h4 class="agent-heading">$1</h4>');
   text = text.replace(/^## (.*$)/gim, '<h3 class="agent-heading">$1</h3>');
   text = text.replace(/^# (.*$)/gim, '<h2 class="agent-heading">$1</h2>');
 
-  // 4. Bold and Italics
+  // Emphasis
   text = text.replace(/\*\*(.*?)\*\*/g, '<strong class="agent-strong">$1</strong>');
   text = text.replace(/\*([^\*]+)\*/g, '<em class="agent-em">$1</em>');
 
-  // 5. Inline code
+  // Inline code
   text = text.replace(/`([^`]+)`/g, '<code class="agent-inline-code">$1</code>');
 
-  // 6. Mission Rank and Priority Pills
+  // Mission badges and priority pills
   text = text.replace(/Rank (\d+):/g, '<span class="agent-rank-badge">Rank $1</span>');
   text = text.replace(/Priority Score: (\d+(?:\.\d+)?)\/100/g, '<span class="priority-pill priority-critical">Priority $1/100</span>');
 
-  // 7. Parse Markdown Tables and Lists
+  // Tables and lists
   const lines = text.split("\n");
   let inList = false;
   let inTable = false;
@@ -2037,7 +2012,7 @@ function renderPathBreadcrumbs(evidence) {
     `;
   }
 
-  // 1. Check verified paths to healthcare
+  // Verified paths to healthcare
   if (evidence.verified_paths && evidence.verified_paths.length > 0) {
     const p = evidence.verified_paths[0];
     const locs = p.location_names || [];
@@ -2068,7 +2043,7 @@ function renderPathBreadcrumbs(evidence) {
     `;
   }
 
-  // 2. Check potential paths (needs recon)
+  // Potential paths needing recon
   if (evidence.potential_paths && evidence.potential_paths.length > 0) {
     const p = evidence.potential_paths[0];
     const locs = p.location_names || [];
@@ -2099,7 +2074,7 @@ function renderPathBreadcrumbs(evidence) {
     `;
   }
 
-  // 3. Check affected settlements in blast radius
+  // Downstream settlements affected in blast radius
   if (evidence.affected_settlements && evidence.affected_settlements.length > 0) {
     const targetRoad = evidence.road_id || "";
     const affIds = evidence.affected_settlements.map(s => s.id || s);
@@ -2159,9 +2134,7 @@ window.copyBubbleAnswer = function(btn) {
   }
 };
 
-/* ==========================================================================
-   Zero-State Ingestion Workers (Manual Upload & Sample Ingestion)
-   ========================================================================== */
+// Ingestion handlers for sample and custom topology uploads
 function logToIngestTerminal(text) {
   const terminal = document.getElementById("ingest-terminal");
   const output = document.getElementById("ingest-terminal-output");

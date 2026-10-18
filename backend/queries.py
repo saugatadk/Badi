@@ -656,6 +656,24 @@ def get_network_snapshot() -> Dict[str, Any]:
             ))
 
     # 3. Fetch RoadSegments
+    # Pre-fetch all bridges grouped by road to eliminate N+1 Cypher query bottleneck (Problem H)
+    bridges_by_road: Dict[str, List[Dict[str, Any]]] = {}
+    b_all_res = graph.query(
+        "MATCH (r:RoadSegment)-[:INCLUDES_BRIDGE]->(b:Bridge) "
+        "RETURN r.id AS road_id, b.name AS name, b.status AS status, b.lat AS lat, b.lon AS lon"
+    )
+    if b_all_res and b_all_res.result_set:
+        for b_row in b_all_res.result_set:
+            brid = str(b_row[0])
+            if brid not in bridges_by_road:
+                bridges_by_road[brid] = []
+            bridges_by_road[brid].append({
+                "name": b_row[1],
+                "status": b_row[2],
+                "lat": float(b_row[3]),
+                "lon": float(b_row[4])
+            })
+
     road_res = graph.query("MATCH (r:RoadSegment) RETURN r")
     roads = []
     verified_roads = 0
@@ -689,21 +707,8 @@ def get_network_snapshot() -> Dict[str, Any]:
                 if u_loc and v_loc:
                     coords = [[u_loc["lon"], u_loc["lat"]], [v_loc["lon"], v_loc["lat"]]]
 
-            # Fetch bridge count and names for this road
-            b_res = graph.query(
-                "MATCH (r:RoadSegment {id: $road_id})-[:INCLUDES_BRIDGE]->(b:Bridge) "
-                "RETURN b.name, b.status, b.lat, b.lon",
-                {"road_id": r["id"]}
-            )
-            road_bridges = []
-            if b_res and b_res.result_set:
-                for b_row in b_res.result_set:
-                    road_bridges.append({
-                        "name": b_row[0],
-                        "status": b_row[1],
-                        "lat": float(b_row[2]),
-                        "lon": float(b_row[3])
-                    })
+            # Fetch bridge count and names for this road from pre-fetched map
+            road_bridges = bridges_by_road.get(r["id"], [])
 
             roads.append(RoadSegmentModel(
                 id=r["id"],

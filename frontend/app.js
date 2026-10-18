@@ -122,7 +122,43 @@ function initMap() {
               "line-dasharray": [2, 2]
             }
           },
-          // 5. FalkorDB Lifelines Casing (Thick dark halo for high contrast over satellite)
+          // 5. White Glow Aura for Selected Edge(s) (Positioned underneath road casing to preserve original structure)
+          {
+            id: "network-roads-halo",
+            type: "line",
+            source: "network-roads",
+            filter: ["==", ["get", "id"], ""],
+            layout: { "line-join": "round", "line-cap": "round" },
+            paint: {
+              "line-color": "#ffffff",
+              "line-width": [
+                "case",
+                ["==", ["get", "is_bridge"], true], 18.0,
+                15.0
+              ],
+              "line-opacity": 0.85,
+              "line-blur": 2.5
+            }
+          },
+          // 5b. White Edge Highlight Casing (Positioned directly under dark road casing to frame outer edges in crisp white)
+          {
+            id: "network-roads-selection-casing",
+            type: "line",
+            source: "network-roads",
+            filter: ["==", ["get", "id"], ""],
+            layout: { "line-join": "round", "line-cap": "round" },
+            paint: {
+              "line-color": "#ffffff",
+              "line-width": [
+                "case",
+                ["==", ["get", "is_bridge"], true], 13.0,
+                10.5
+              ],
+              "line-opacity": 1.0,
+              "line-blur": 0
+            }
+          },
+          // 6. FalkorDB Lifelines Casing (Thick dark halo for high contrast over satellite)
           {
             id: "network-roads-casing",
             type: "line",
@@ -130,11 +166,15 @@ function initMap() {
             layout: { "line-join": "round", "line-cap": "round" },
             paint: {
               "line-color": "#020617",
-              "line-width": 8.0,
-              "line-opacity": 0.9
+              "line-width": [
+                "case",
+                ["==", ["get", "is_bridge"], true], 8.5,
+                7.0
+              ],
+              "line-opacity": 0.95
             }
           },
-          // 6. FalkorDB Lifelines Solid (Passable = Emerald, Blocked = Crimson)
+          // 7. FalkorDB Lifelines Solid (Passable = Emerald, Blocked = Crimson)
           {
             id: "network-roads-line",
             type: "line",
@@ -151,12 +191,12 @@ function initMap() {
               ],
               "line-width": [
                 "case",
-                ["==", ["get", "is_bridge"], true], 5.5,
-                4.2
+                ["==", ["get", "is_bridge"], true], 5.2,
+                4.0
               ]
             }
           },
-          // 7. FalkorDB Lifelines Dashed (Unknown = Amber, Disputed = Magenta)
+          // 8. FalkorDB Lifelines Dashed (Unknown = Amber, Disputed = Magenta)
           {
             id: "network-roads-dashed",
             type: "line",
@@ -171,77 +211,12 @@ function initMap() {
                 "disputed", "#ec4899",
                 "#e2e8f0"
               ],
-              "line-width": 4.2,
+              "line-width": [
+                "case",
+                ["==", ["get", "is_bridge"], true], 5.2,
+                4.0
+              ],
               "line-dasharray": [2, 2]
-            }
-          },
-          // 8. Outer Selection Aura for Active Focused Road
-          {
-            id: "network-roads-halo",
-            type: "line",
-            source: "network-roads",
-            filter: ["==", ["get", "id"], ""],
-            layout: { "line-join": "round", "line-cap": "round" },
-            paint: {
-              "line-color": [
-                "match",
-                ["get", "status"],
-                "verified_passable", "#34d399",
-                "blocked", "#f87171",
-                "unknown", "#fbbf24",
-                "disputed", "#f472b6",
-                "#38bdf8"
-              ],
-              "line-width": [
-                "case",
-                ["==", ["get", "is_bridge"], true], 11.5,
-                9.5
-              ],
-              "line-opacity": 0.8,
-              "line-blur": 2.0
-            }
-          },
-          // 9. Active Selected Road Stroke (Passable = Emerald, Blocked = Crimson)
-          {
-            id: "network-roads-highlight",
-            type: "line",
-            source: "network-roads",
-            filter: ["all", ["==", ["get", "id"], ""], ["in", ["get", "status"], ["literal", ["verified_passable", "blocked"]]]],
-            layout: { "line-join": "round", "line-cap": "round" },
-            paint: {
-              "line-color": [
-                "match",
-                ["get", "status"],
-                "verified_passable", "#10b981",
-                "blocked", "#ef4444",
-                "#10b981"
-              ],
-              "line-width": [
-                "case",
-                ["==", ["get", "is_bridge"], true], 6.2,
-                5.0
-              ],
-              "line-opacity": 1.0
-            }
-          },
-          // 10. Active Selected Road Dashed (Unknown = Amber, Disputed = Magenta)
-          {
-            id: "network-roads-highlight-dashed",
-            type: "line",
-            source: "network-roads",
-            filter: ["all", ["==", ["get", "id"], ""], ["in", ["get", "status"], ["literal", ["unknown", "disputed"]]]],
-            layout: { "line-join": "round", "line-cap": "round" },
-            paint: {
-              "line-color": [
-                "match",
-                ["get", "status"],
-                "unknown", "#f59e0b",
-                "disputed", "#ec4899",
-                "#f59e0b"
-              ],
-              "line-width": 5.0,
-              "line-dasharray": [2, 2],
-              "line-opacity": 1.0
             }
           }
         ]
@@ -254,23 +229,33 @@ function initMap() {
     map.addControl(new maplibregl.NavigationControl({ showCompass: true }), "top-right");
     map.addControl(new maplibregl.FullscreenControl(), "top-right");
 
+    const interactiveRoadLayers = [
+      "network-roads-line",
+      "network-roads-dashed",
+      "network-roads-casing",
+      "network-roads-selection-casing",
+      "network-roads-halo"
+    ];
+
     // Click on FalkorDB Lifelines
-    map.on("click", ["network-roads-line", "network-roads-dashed", "network-roads-highlight", "network-roads-highlight-dashed", "network-roads-halo"], (e) => {
+    map.on("click", interactiveRoadLayers, (e) => {
       if (e.features && e.features.length > 0) {
+        if (e.originalEvent) e.originalEvent._roadHandled = true;
         const roadId = e.features[0].properties.id;
         selectRoad(roadId);
       }
     });
 
-    map.on("mouseenter", ["network-roads-line", "network-roads-dashed", "network-roads-highlight", "network-roads-highlight-dashed", "network-roads-halo"], () => {
+    map.on("mouseenter", interactiveRoadLayers, () => {
       map.getCanvas().style.cursor = "pointer";
     });
-    map.on("mouseleave", ["network-roads-line", "network-roads-dashed", "network-roads-highlight", "network-roads-highlight-dashed", "network-roads-halo"], () => {
+    map.on("mouseleave", interactiveRoadLayers, () => {
       map.getCanvas().style.cursor = "";
     });
 
     // Click on real road or bridge feature to view attribute popup
     map.on("click", ["bridges-osm-line", "destroyed-features-line", "roads-osm-line"], (e) => {
+      if (e.originalEvent && e.originalEvent._roadHandled) return;
       if (e.features && e.features.length > 0) {
         const feat = e.features[0];
         const props = feat.properties;
@@ -560,6 +545,9 @@ async function loadAllData() {
       fetchMemories(),
       checkHealth()
     ]);
+    if (networkState && networkState.kpis) {
+      updateKPIS(networkState.kpis);
+    }
   } catch (err) {
     console.error("Error loading network data:", err);
     showToast("FalkorDB synchronization error", "error");
@@ -678,14 +666,16 @@ function updateKPIS(kpi) {
   setEl("val-active-missions", kpi.active_missions ?? "--");
   setEl("val-episodic-memories", kpi.episodic_memories ?? "--");
 
-  // HOT Flood Survey Metrics
+  // HOT Flood Survey Metrics (FalkorDB Grounded)
   if (networkState && networkState.bridge_summary) {
     const bs = networkState.bridge_summary;
-    const washedCount = bs["Washed out"] || 39;
+    const washedCount = bs["Washed out"] !== undefined ? bs["Washed out"] : 0;
     setEl("val-hot-bridges", washedCount);
   }
   if (networkState && networkState.building_summary) {
-    const bldgDestroyed = networkState.building_summary.by_status?.Destroyed || 2886;
+    const bldgDestroyed = networkState.building_summary.by_status?.Destroyed !== undefined
+      ? networkState.building_summary.by_status.Destroyed
+      : 0;
     setEl("val-hot-buildings", bldgDestroyed.toLocaleString());
   }
 }
@@ -816,17 +806,37 @@ function inspectNearestLifeline(featureName, lng, lat) {
   }
 }
 
+const SELECTION_OUTLINE_LAYERS = [
+  "network-roads-halo",
+  "network-roads-selection-casing"
+];
+
+function makeRoadIdFilter(roadIds) {
+  const ids = Array.isArray(roadIds) ? roadIds.filter(Boolean) : (roadIds ? [roadIds] : []);
+  if (ids.length === 0) {
+    return ["==", ["get", "id"], ""];
+  }
+  if (ids.length === 1) {
+    return ["==", ["get", "id"], ids[0]];
+  }
+  return ["match", ["get", "id"], ids, true, false];
+}
+
+function applyRoadFilter(roadIds) {
+  if (!map) return;
+  const idFilter = makeRoadIdFilter(roadIds);
+
+  // Set white glow and crisp white edge highlight framing the road
+  SELECTION_OUTLINE_LAYERS.forEach(layerId => {
+    if (map.getLayer(layerId)) {
+      map.setFilter(layerId, idFilter);
+    }
+  });
+}
+
 function clearRoadHighlight() {
   if (!map) return;
-  if (map.getLayer("network-roads-halo")) {
-    map.setFilter("network-roads-halo", ["==", ["get", "id"], ""]);
-  }
-  if (map.getLayer("network-roads-highlight")) {
-    map.setFilter("network-roads-highlight", ["all", ["==", ["get", "id"], ""], ["in", ["get", "status"], ["literal", ["verified_passable", "blocked"]]]]);
-  }
-  if (map.getLayer("network-roads-highlight-dashed")) {
-    map.setFilter("network-roads-highlight-dashed", ["all", ["==", ["get", "id"], ""], ["in", ["get", "status"], ["literal", ["unknown", "disputed"]]]]);
-  }
+  applyRoadFilter([]);
   document.querySelectorAll(".mission-card").forEach(c => c.classList.remove("active-mission"));
   document.querySelectorAll(".settlement-marker").forEach(m => m.classList.remove("marker-path-focus"));
 }
@@ -841,18 +851,9 @@ async function selectRoad(roadId) {
     c.classList.toggle("active-mission", c.getAttribute("data-road-id") === roadId);
   });
 
-  // Highlight road on map with status-matching halo and stroke
-  if (map) {
-    if (map.getLayer("network-roads-halo")) {
-      map.setFilter("network-roads-halo", ["==", ["get", "id"], roadId]);
-    }
-    if (map.getLayer("network-roads-highlight")) {
-      map.setFilter("network-roads-highlight", ["all", ["==", ["get", "id"], roadId], ["in", ["get", "status"], ["literal", ["verified_passable", "blocked"]]]]);
-    }
-    if (map.getLayer("network-roads-highlight-dashed")) {
-      map.setFilter("network-roads-highlight-dashed", ["all", ["==", ["get", "id"], roadId], ["in", ["get", "status"], ["literal", ["unknown", "disputed"]]]]);
-    }
-  }
+  // Highlight road on map: white edge outline framing its original color
+  applyRoadFilter(roadId);
+
   if (networkState && networkState.road_segments) {
     const road = networkState.road_segments.find(r => r.id === roadId);
     if (road && road.coordinates && road.coordinates.length > 0) {
@@ -867,6 +868,9 @@ async function selectRoad(roadId) {
     if (!resp.ok) throw new Error("Failed to load road details");
     const data = await resp.json();
     renderRoadInspector(data);
+    if (data.endpoints && data.endpoints.length > 0) {
+      highlightSettlementMarkers(data.endpoints.map(e => e.id || e.name));
+    }
   } catch (err) {
     showToast(`Error inspecting road ${roadId}`, "error");
   }
@@ -879,26 +883,8 @@ function focusCorridorOnMap(roadIds, options = {}) {
   if (!map) return;
   const ids = Array.isArray(roadIds) ? roadIds.filter(Boolean) : (roadIds ? [roadIds] : []);
 
-  // 1. Highlight all road segments in this corridor
-  if (ids.length > 0) {
-    if (map.getLayer("network-roads-halo")) {
-      map.setFilter("network-roads-halo", ["in", ["get", "id"], ["literal", ids]]);
-    }
-    if (map.getLayer("network-roads-highlight")) {
-      map.setFilter("network-roads-highlight", [
-        "all",
-        ["in", ["get", "id"], ["literal", ids]],
-        ["in", ["get", "status"], ["literal", ["verified_passable", "blocked"]]]
-      ]);
-    }
-    if (map.getLayer("network-roads-highlight-dashed")) {
-      map.setFilter("network-roads-highlight-dashed", [
-        "all",
-        ["in", ["get", "id"], ["literal", ids]],
-        ["in", ["get", "status"], ["literal", ["unknown", "disputed"]]]
-      ]);
-    }
-  }
+  // 1. Highlight all road segments in this corridor with white edge outline preserving original colors
+  applyRoadFilter(ids);
 
   // 2. Compute bounding box across all road coordinates and included locations
   const bounds = new maplibregl.LngLatBounds();
@@ -964,9 +950,10 @@ function focusMapFromAgentResponse(data) {
   const ev = data.supporting_evidence || {};
 
   // 0. Point-to-Point Corridor Routing (find_route_between)
-  if (ev.primary_route && ev.primary_route.road_ids) {
-    const roadIds = ev.primary_route.road_ids || [];
-    const locs = (ev.primary_route.locations || []).map(l => (typeof l === 'object' ? l.id : l));
+  const route = ev.primary_route || (ev.routes && ev.routes[0]);
+  if (route && route.road_ids && route.road_ids.length > 0) {
+    const roadIds = route.road_ids || [];
+    const locs = (route.locations || []).map(l => (typeof l === 'object' ? (l.id || l.name) : l));
     focusCorridorOnMap(roadIds, {
       locations: locs,
       settlements: locs,
@@ -2021,12 +2008,13 @@ function renderPathBreadcrumbs(evidence) {
   if (!evidence || typeof evidence !== "object") return "";
 
   // 0. Point-to-Point Corridor Route (from find_route_between)
-  if (evidence.primary_route && evidence.primary_route.location_names) {
-    const p = evidence.primary_route;
-    const locs = p.location_names || [];
+  const primaryP = evidence.primary_route || (evidence.routes && evidence.routes[0]);
+  if (primaryP && (primaryP.location_names || primaryP.locations)) {
+    const p = primaryP;
+    const locs = p.location_names || (p.locations || []).map(l => (typeof l === 'object' ? (l.name || l.id) : l));
     const chips = [];
     locs.forEach((loc, i) => {
-      const locId = (p.locations && p.locations[i]) ? (p.locations[i].id || p.locations[i]) : loc;
+      const locId = (p.locations && p.locations[i]) ? (p.locations[i].id || p.locations[i].name || p.locations[i]) : loc;
       chips.push(`<span class="path-chip loc interactive" onclick="focusCorridorOnMap([], { locations: ['${locId}'], settlements: ['${locId}'] })" title="Focus ${escapeHtml(loc)} on map"><i class="fa-solid fa-location-dot"></i> ${escapeHtml(loc)}</span>`);
       if (i < locs.length - 1) {
         const roadId = (p.road_ids && p.road_ids[i]) ? p.road_ids[i] : "";
@@ -2039,10 +2027,11 @@ function renderPathBreadcrumbs(evidence) {
       }
     });
     const allRoadIds = JSON.stringify(p.road_ids || []);
+    const allLocIds = JSON.stringify((p.locations || []).map(l => (typeof l === 'object' ? (l.id || l.name) : l)));
     return `
       <div class="path-section-header">
         <span class="path-title"><i class="fa-solid fa-route"></i> Transit Corridor Route (${escapeHtml(p.tier_label || 'Calculated')} - ${p.total_km} km):</span>
-        <button class="copy-code-btn" style="color: #38bdf8; border-color: rgba(56,189,248,0.3);" onclick='focusCorridorOnMap(${allRoadIds}, { fitBounds: true })'><i class="fa-solid fa-crosshairs"></i> Focus Route on Map</button>
+        <button class="copy-code-btn" style="color: #ffffff; border-color: rgba(255,255,255,0.4);" onclick='focusCorridorOnMap(${allRoadIds}, { fitBounds: true, locations: ${allLocIds}, settlements: ${allLocIds} })'><i class="fa-solid fa-crosshairs"></i> Focus Route on Map</button>
       </div>
       <div class="path-breadcrumbs-box">${chips.join("")}</div>
     `;

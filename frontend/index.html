@@ -19,7 +19,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
 
   <!-- Custom Styles -->
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=2.2">
 </head>
 <body>
   <div id="app-container">
@@ -38,31 +38,31 @@
       <!-- Center: Apple-Crafted Glance Capsule (Consolidated Key Disaster Metrics) -->
       <div class="header-center">
         <div class="glance-capsule">
-          <div class="glance-item" title="39 Washed Out Bridges in Trishuli River Corridor">
+          <div class="glance-item" title="Washed Out Bridges in Trishuli River Corridor">
             <span class="glance-dot dot-rose"></span>
             <span class="glance-label">Bridges Washed:</span>
-            <span class="glance-value text-rose" id="val-hot-bridges">39</span>
+            <span class="glance-value text-rose" id="val-hot-bridges">--</span>
           </div>
           <div class="glance-divider"></div>
-          <div class="glance-item" title="2,886 Destroyed Buildings in Rasuwa & Nuwakot">
+          <div class="glance-item" title="Destroyed Buildings in Rasuwa & Nuwakot">
             <span class="glance-dot dot-amber"></span>
             <span class="glance-label">Bldgs Destroyed:</span>
-            <span class="glance-value text-amber" id="val-hot-buildings">2,886</span>
+            <span class="glance-value text-amber" id="val-hot-buildings">--</span>
           </div>
           <div class="glance-divider"></div>
           <div class="glance-item" title="Active Field Verification Missions in FalkorDB">
             <span class="glance-dot dot-sky"></span>
             <span class="glance-label">Missions:</span>
-            <span class="glance-value text-sky" id="val-active-missions">6</span>
+            <span class="glance-value text-sky" id="val-active-missions">--</span>
           </div>
           <div class="glance-divider"></div>
           <div class="glance-item" title="Passable vs Blocked Road Segments">
             <span class="glance-dot dot-emerald"></span>
             <span class="glance-label">Passable:</span>
-            <span class="glance-value text-emerald" id="val-verified-roads">6</span>
+            <span class="glance-value text-emerald" id="val-verified-roads">--</span>
             <span class="glance-slash">/</span>
             <span class="glance-label">Blocked:</span>
-            <span class="glance-value text-rose" id="val-blocked-roads">3</span>
+            <span class="glance-value text-rose" id="val-blocked-roads">--</span>
           </div>
         </div>
       </div>
@@ -167,6 +167,7 @@
             <span class="legend-chip"><span class="chip-line line-passable"></span> Passable Lifeline</span>
             <span class="legend-chip"><span class="chip-line line-blocked"></span> Blocked Cut-Edge</span>
             <span class="legend-chip"><span class="chip-line line-disputed"></span> Disputed / Unverified</span>
+            <span class="legend-chip"><span class="chip-line line-selected"></span> Selected Edge (White Outline)</span>
           </div>
           <span id="map-selection-hint"><i class="fa-solid fa-arrow-pointer"></i> Click any road, bridge, or settlement to inspect</span>
         </div>
@@ -479,6 +480,6 @@
     }
   </script>
   <!-- Application Logic -->
-  <script src="app.js"></script>
+  <script src="app.js?v=2.2"></script>
 </body>
 </html>

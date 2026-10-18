@@ -617,6 +617,10 @@ button,
 .chip-line.line-passable { background: #10b981; }
 .chip-line.line-blocked { background: #f43f5e; }
 .chip-line.line-disputed { background: #f59e0b; }
+.chip-line.line-selected {
+  background: #10b981;
+  box-shadow: 0 0 0 2px #ffffff, 0 0 6px rgba(255, 255, 255, 0.9);
+}
 .chip-line.line-osm { background: #64748b; }
 
 /* Minimalist Floating Edge Launcher Rail (Apple-grade slim edge tab to expand dock) */

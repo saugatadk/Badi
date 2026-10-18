@@ -153,10 +153,6 @@ def test_out_of_scope_query_scope_enforcement():
     Irrelevant questions outside the flood disaster corridor (e.g. general festivals, trivia)
     must not execute graph Cypher traversals and must return dedicated out-of-scope metadata.
     """
-    from backend.config import GEMINI_API_KEY
-    if not GEMINI_API_KEY:
-        pytest.skip("GEMINI_API_KEY not configured")
-
     response = execute_agent_query("what is dashain?")
     assert response.agent_role == "ScopeEnforcer"
     assert response.tool_called == "none_out_of_scope"

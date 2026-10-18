@@ -148,7 +148,7 @@ Badi coordinates two specialized agents backed by FalkorDB tools:
 
 ### Offline Router and LLM Tool Calling
 
-With a `GEMINI_API_KEY`, queries route through `gemini-2.5-flash` with direct tool declarations. Without an API key, Badi falls back to a deterministic regex and keyword router that calls the same FalkorDB functions, so the system works fully offline.
+With a `GEMINI_API_KEY`, queries route through `gemini-3.1-flash-lite` with direct tool declarations. Without an API key, Badi falls back to a deterministic regex and keyword router that calls the same FalkorDB functions, so the system works fully offline.
 
 ### Hard Boundary Guardrails
 

@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional
 # Ensure project root is on sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from mcp.server.mcpserver import MCPServer
+from mcp.server.fastmcp import FastMCP
 from backend.queries import (
     classify_settlement_access,
     get_road_evidence,
@@ -29,9 +29,9 @@ from backend.queries import (
 from backend.missions import get_ranked_missions
 from backend.graph import get_graph
 
-server = MCPServer(
+server = FastMCP(
     name="badi-falkordb-mcp",
-    description="FalkorDB Connected Disaster Graph Tools & Multi-Agent Memory Server for Trishuli Flood Corridor"
+    instructions="FalkorDB Connected Disaster Graph Tools & Multi-Agent Memory Server for Trishuli Flood Corridor"
 )
 
 # Standard Disaster Response Procedural Playbooks (Track 02: Procedural Memory)
@@ -164,15 +164,17 @@ def tool_record_road_observation(road_name_or_id: str, status: str, note: str, s
         reported_status=status,
         note=note,
         source_id=source,
-        override=override
+        override=override,
+        session_id="mcp_session",
+        agent_role="Field Coordinator"
     )
     return json.dumps({
         "road_id": rid,
         "road_name": rname,
-        "recorded_status": res.reported_status,
-        "resolved_network_status": res.resolved_status,
-        "reason": res.reason,
-        "active_missions_count": len(res.active_missions)
+        "recorded_status": status,
+        "resolved_network_status": res["new_status"],
+        "reason": res["resolution_reason"],
+        "active_missions_count": res["missions_count"]
     }, indent=2)
 
 @server.tool(name="get_procedural_playbook", description="Retrieves standard disaster triage SOP playbooks stored in FalkorDB procedural memory (e.g. 'bridge_washout', 'isolated_community', 'conflicting_reports').")
